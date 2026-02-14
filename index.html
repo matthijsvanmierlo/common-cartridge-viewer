@@ -3,141 +3,116 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>IMSCC Explorer - Responsive</title>
-    <!-- Libraries -->
+    <title>IMSCC Explorer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
         
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f8fafc;
-            overscroll-behavior-y: contain;
+        /* Mobile Overlay Logic */
+        #sidebar {
+            transition: transform 0.3s ease-in-out;
+            z-index: 40;
         }
 
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-
-        /* Smooth Mobile Transitions */
-        #sidebar {
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        @media (max-width: 767px) {
+            .sidebar-hidden { transform: translateX(-100%); }
+            .sidebar-visible { transform: translateX(0); }
         }
 
         .active-item {
-            background-color: #eff6ff;
+            background-color: #f0f7ff;
             color: #2563eb;
             border-left: 4px solid #3b82f6;
         }
 
-        .folder-closed + .folder-children { display: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         
-        /* Iframe styling to ensure mobile content is readable */
-        #preview-iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-            background: white;
-        }
+        iframe { border: none; width: 100%; height: 100%; background: white; }
 
-        /* Mobile specific adjustments */
-        @media (max-width: 768px) {
-            .mobile-view-active #sidebar {
-                transform: translateX(-100%);
-            }
-            .mobile-nav-active #main-viewer {
-                transform: translateX(100%);
-            }
+        /* Loader Animation */
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
         }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="h-screen flex flex-col overflow-hidden">
 
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="hidden fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center">
+        <div class="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4">
+            <div class="loader"></div>
+            <p class="text-sm font-semibold text-slate-700">Unpacking Cartridge...</p>
+        </div>
+    </div>
+
     <!-- Header -->
-    <header class="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between z-30 shadow-sm shrink-0">
-        <div class="flex items-center gap-2">
-            <div class="bg-blue-600 p-1.5 rounded-lg">
+    <header class="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between z-50 shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-600 p-2 rounded-lg shadow-sm">
                 <i data-lucide="package" class="text-white w-5 h-5"></i>
             </div>
-            <div class="hidden sm:block">
-                <h1 class="text-sm font-bold text-slate-800 leading-none">IMSCC Explorer</h1>
-                <p class="text-[10px] text-slate-500 font-medium uppercase tracking-wider">Cartridge Viewer</p>
-            </div>
+            <h1 class="text-sm font-bold text-slate-800 hidden xs:block">IMSCC Explorer</h1>
         </div>
         
         <div class="flex items-center gap-2">
-            <!-- Mobile Toggle Button (Visible only on mobile when a file is loaded) -->
-            <button id="mobile-toggle" onclick="toggleMobileView()" class="md:hidden hidden items-center gap-1.5 bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full text-xs font-bold border border-blue-100 transition-all">
-                <i data-lucide="list" class="w-4 h-4" id="toggle-icon"></i>
-                <span id="toggle-text">Show List</span>
+            <button id="mobile-toggle" onclick="toggleMobileView()" class="md:hidden hidden flex items-center gap-2 bg-blue-50 text-blue-600 px-3 py-2 rounded-xl text-xs font-bold border border-blue-100">
+                <i data-lucide="menu" class="w-4 h-4" id="toggle-icon"></i>
+                <span id="toggle-text">Menu</span>
             </button>
 
-            <label for="file-upload" class="cursor-pointer bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2">
-                <i data-lucide="upload" class="w-3.5 h-3.5"></i>
-                <span class="hidden sm:inline">Open File</span>
+            <label for="file-upload" class="cursor-pointer bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg active:scale-95 transition-transform">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                Open
             </label>
             <input id="file-upload" type="file" accept=".imscc,.zip" class="hidden" onchange="handleFileSelect(event)">
-            
-            <button onclick="resetApp()" class="p-1.5 text-slate-400 hover:text-red-500 transition-colors">
-                <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
-            </button>
         </div>
     </header>
 
     <main class="flex-1 flex overflow-hidden relative">
-        <!-- Dropzone / Landing -->
-        <div id="dropzone" class="absolute inset-0 z-40 bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-            <div class="max-w-sm w-full bg-white border-2 border-dashed border-slate-200 rounded-3xl p-8 shadow-xl">
-                <div class="mb-6 inline-flex p-4 bg-blue-50 text-blue-600 rounded-2xl">
-                    <i data-lucide="file-archive" class="w-10 h-10"></i>
-                </div>
-                <h2 class="text-xl font-bold text-slate-800 mb-2">Teacher Content Viewer</h2>
-                <p class="text-slate-500 text-sm mb-6">Drop your Schoology or Canvas .imscc file here to start browsing.</p>
-                <div class="space-y-3">
-                    <div class="flex items-center gap-3 text-left text-xs text-slate-600 bg-slate-50 p-3 rounded-xl">
-                        <i data-lucide="lock" class="w-4 h-4 text-blue-500"></i>
-                        <span>Files are processed locally. No data is sent to any server.</span>
-                    </div>
+        <!-- Landing State -->
+        <div id="dropzone" class="absolute inset-0 z-[45] bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+            <div class="max-w-xs w-full">
+                <div class="mb-6 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                    <i data-lucide="upload-cloud" class="w-12 h-12 text-blue-500 mx-auto mb-4"></i>
+                    <h2 class="text-lg font-bold text-slate-800 mb-2">Upload Cartridge</h2>
+                    <p class="text-slate-500 text-xs leading-relaxed">Select a .imscc file exported from Schoology or Canvas to preview content.</p>
                 </div>
             </div>
         </div>
 
-        <!-- App Container -->
-        <div id="app-content" class="hidden flex w-full h-full relative overflow-hidden">
+        <!-- App Workspace -->
+        <div id="app-content" class="hidden flex w-full h-full relative">
             
-            <!-- Sidebar (Explorer) -->
-            <aside id="sidebar" class="absolute inset-0 z-20 md:relative md:translate-x-0 w-full md:w-80 border-r border-slate-200 bg-white flex flex-col transition-transform duration-300">
-                <div class="p-4 border-b border-slate-100 flex items-center justify-between">
-                    <h3 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Course Navigator</h3>
-                    <span id="file-count" class="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full"></span>
+            <!-- Sidebar Explorer -->
+            <aside id="sidebar" class="sidebar-visible absolute inset-0 md:relative md:translate-x-0 w-full md:w-80 border-r border-slate-200 bg-white flex flex-col">
+                <div class="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Navigation</span>
+                    <span id="item-count" class="text-[10px] font-bold text-blue-500"></span>
                 </div>
-                <div id="tree-container" class="flex-1 overflow-y-auto custom-scrollbar p-2 pb-20">
-                    <!-- Tree items injected here -->
+                <div id="tree-container" class="flex-1 overflow-y-auto custom-scrollbar p-2 pb-24">
+                    <!-- Dynamic Items -->
                 </div>
             </aside>
 
-            <!-- Main Viewer -->
-            <section id="main-viewer" class="flex-1 flex flex-col bg-slate-100 z-10 w-full">
-                <!-- Viewer Action Bar -->
-                <div class="h-10 border-b border-slate-200 bg-white px-4 flex items-center justify-between shrink-0">
-                    <div id="active-item-title" class="text-xs font-semibold text-slate-500 truncate max-w-[60vw]">
-                        Select a file to preview
-                    </div>
-                    <div id="viewer-actions" class="hidden flex gap-2">
-                        <button id="open-new-tab" class="text-[10px] text-blue-600 font-bold hover:underline flex items-center gap-1">
-                            <i data-lucide="external-link" class="w-3 h-3"></i>
-                            OPEN FULL
-                        </button>
-                    </div>
+            <!-- Content Viewer -->
+            <section id="viewer" class="flex-1 flex flex-col bg-slate-100 w-full overflow-hidden">
+                <div class="h-10 bg-white border-b border-slate-200 px-4 flex items-center shrink-0">
+                    <p id="active-title" class="text-[11px] font-medium text-slate-500 truncate italic">No file selected</p>
                 </div>
-                
-                <!-- Preview Canvas -->
-                <div class="flex-1 relative bg-slate-200 shadow-inner">
-                    <div id="preview-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-center p-8">
-                        <i data-lucide="eye-off" class="w-10 h-10 opacity-20 mb-3"></i>
-                        <p class="text-sm">Select an item from the list to view its contents.</p>
+                <div class="flex-1 relative">
+                    <div id="preview-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
+                        <i data-lucide="book-open" class="w-12 h-12 opacity-10 mb-4"></i>
+                        <p class="text-sm">Select a resource to preview</p>
                     </div>
                     <iframe id="preview-iframe" class="hidden" sandbox="allow-scripts allow-same-origin"></iframe>
                 </div>
@@ -145,239 +120,159 @@
         </div>
     </main>
 
-    <!-- Error UI -->
-    <div id="error-modal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center">
-            <div class="bg-red-50 text-red-500 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4">
-                <i data-lucide="alert-circle" class="w-6 h-6"></i>
-            </div>
-            <h3 class="text-lg font-bold text-slate-800 mb-1">Upload Error</h3>
-            <p id="error-message" class="text-slate-500 text-sm mb-6 leading-relaxed"></p>
-            <button onclick="closeError()" class="w-full bg-slate-900 text-white py-2.5 rounded-xl font-bold shadow-lg active:scale-95 transition-transform">Got it</button>
-        </div>
-    </div>
-
     <script>
-        // --- State ---
         let currentZip = null;
-        let resourcesMap = {};
-        let activeBlobUrl = null;
-        let isMobileTreeView = true; // For responsive toggle
+        let resources = {};
+        let activeBlob = null;
+        let isMenuOpen = true;
 
-        // --- Init ---
-        window.onload = () => {
+        window.onload = () => lucide.createIcons();
+
+        function toggleMobileView() {
+            const sidebar = document.getElementById('sidebar');
+            const icon = document.getElementById('toggle-icon');
+            const text = document.getElementById('toggle-text');
+
+            if (sidebar.classList.contains('sidebar-hidden')) {
+                sidebar.classList.remove('sidebar-hidden');
+                sidebar.classList.add('sidebar-visible');
+                text.innerText = "Close";
+                icon.setAttribute('data-lucide', 'x');
+            } else {
+                sidebar.classList.remove('sidebar-visible');
+                sidebar.classList.add('sidebar-hidden');
+                text.innerText = "Menu";
+                icon.setAttribute('data-lucide', 'menu');
+            }
             lucide.createIcons();
-            setupDragAndDrop();
-        };
-
-        function setupDragAndDrop() {
-            const dropzone = document.getElementById('dropzone');
-            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(name => {
-                window.addEventListener(name, (e) => e.preventDefault());
-            });
-
-            window.addEventListener('drop', (e) => {
-                const file = e.dataTransfer.files[0];
-                if (file) processFile(file);
-            });
         }
 
-        async function processFile(file) {
+        async function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const loader = document.getElementById('loading-overlay');
+            loader.classList.remove('hidden');
+
             try {
-                document.body.style.cursor = 'wait';
-                const zip = await JSZip.loadAsync(file);
-                currentZip = zip;
+                currentZip = await JSZip.loadAsync(file);
+                const manifest = await currentZip.file("imsmanifest.xml")?.async("string");
+                if (!manifest) throw new Error("Manifest not found.");
 
-                const manifestFile = zip.file("imsmanifest.xml");
-                if (!manifestFile) throw new Error("Invalid format. Missing imsmanifest.xml.");
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(manifest, "text/xml");
 
-                const xmlText = await manifestFile.async("string");
-                const xmlDoc = new DOMParser().parseFromString(xmlText, "text/xml");
-
-                // 1. Build Resource Map
-                resourcesMap = {};
-                const resources = xmlDoc.getElementsByTagName("resource");
-                for (let res of resources) {
-                    resourcesMap[res.getAttribute("identifier")] = {
-                        type: res.getAttribute("type"),
-                        href: res.getAttribute("href")
+                // Parse Resources
+                resources = {};
+                Array.from(doc.querySelectorAll('resource')).forEach(res => {
+                    resources[res.getAttribute('identifier')] = {
+                        type: res.getAttribute('type'),
+                        href: res.getAttribute('href')
                     };
-                }
+                });
 
-                // 2. Build UI Tree
+                // Build Tree
                 const treeContainer = document.getElementById('tree-container');
                 treeContainer.innerHTML = '';
-                const items = xmlDoc.getElementsByTagName("organization")[0]?.getElementsByTagName("item") || [];
-                
-                if (items.length === 0) throw new Error("No course structure found.");
+                const items = doc.querySelector('organization')?.querySelectorAll('item') || [];
                 
                 buildTree(items, treeContainer);
-                document.getElementById('file-count').innerText = `${items.length} items`;
+                document.getElementById('item-count').innerText = `${items.length} Items`;
 
-                // 3. UI Transition
+                // Switch UI
                 document.getElementById('dropzone').classList.add('hidden');
                 document.getElementById('app-content').classList.remove('hidden');
                 document.getElementById('mobile-toggle').classList.remove('hidden');
                 
-                // On mobile, start with tree visible
-                setMobileView('tree');
-                lucide.createIcons();
+                // Force mobile view to show the tree initially
+                if (window.innerWidth < 768) {
+                    const sidebar = document.getElementById('sidebar');
+                    sidebar.classList.remove('sidebar-hidden');
+                    sidebar.classList.add('sidebar-visible');
+                }
 
+                lucide.createIcons();
             } catch (err) {
-                showError(err.message);
+                alert("Error: " + err.message);
             } finally {
-                document.body.style.cursor = 'default';
+                loader.classList.add('hidden');
             }
         }
 
         function buildTree(nodes, container, depth = 0) {
-            for (let node of nodes) {
-                // Ensure we only look at immediate children for the hierarchy
-                if (node.parentElement.tagName !== 'organization' && node.parentElement.tagName !== 'item') continue;
+            Array.from(nodes).forEach(node => {
+                if (node.parentElement.tagName !== 'organization' && node.parentElement.tagName !== 'item') return;
 
-                const title = node.getElementsByTagName("title")[0]?.textContent || "Untitled";
-                const ref = node.getAttribute("identifierref");
-                const hasChildren = node.getElementsByTagName("item").length > 0;
+                const title = node.querySelector('title')?.textContent || "Untitled";
+                const ref = node.getAttribute('identifierref');
+                const children = Array.from(node.children).filter(c => c.tagName === 'item');
 
-                const itemDiv = document.createElement('div');
-                itemDiv.className = `group flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all hover:bg-slate-50 mb-1`;
-                itemDiv.style.marginLeft = `${depth * 12}px`;
+                const el = document.createElement('div');
+                el.className = `flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors hover:bg-slate-50 mb-1`;
+                el.style.marginLeft = `${depth * 12}px`;
 
-                const icon = hasChildren ? 'folder' : getIcon(ref);
-                
-                itemDiv.innerHTML = `
-                    <i data-lucide="${icon}" class="w-4 h-4 shrink-0 ${hasChildren ? 'text-amber-400' : 'text-slate-400'}"></i>
-                    <span class="text-sm font-medium text-slate-700 truncate">${title}</span>
+                const icon = children.length > 0 ? 'folder' : getIcon(ref);
+                el.innerHTML = `
+                    <i data-lucide="${icon}" class="w-4 h-4 shrink-0 ${children.length > 0 ? 'text-amber-400' : 'text-slate-400'}"></i>
+                    <span class="text-xs font-semibold text-slate-700 truncate">${title}</span>
                 `;
 
                 if (ref) {
-                    itemDiv.onclick = () => selectItem(itemDiv, ref, title);
-                } else if (hasChildren) {
-                    itemDiv.onclick = () => {
-                        // Simple toggle for folder UI
-                        const iconEl = itemDiv.querySelector('[data-lucide]');
-                        const isClosed = itemDiv.classList.toggle('folder-closed');
-                        iconEl.setAttribute('data-lucide', isClosed ? 'folder' : 'folder-open');
-                        lucide.createIcons();
-                    };
+                    el.onclick = () => loadResource(el, ref, title);
                 }
-
-                container.appendChild(itemDiv);
-
-                if (hasChildren) {
-                    const childrenWrap = document.createElement('div');
-                    childrenWrap.className = 'folder-children';
-                    container.appendChild(childrenWrap);
-                    buildTree(Array.from(node.children).filter(c => c.tagName === 'item'), childrenWrap, depth + 1);
-                }
-            }
+                
+                container.appendChild(el);
+                if (children.length > 0) buildTree(children, container, depth + 1);
+            });
         }
 
-        async function selectItem(element, ref, title) {
-            document.querySelectorAll('.group').forEach(el => el.classList.remove('active-item'));
+        async function loadResource(element, ref, title) {
+            document.querySelectorAll('#tree-container > div').forEach(d => d.classList.remove('active-item'));
             element.classList.add('active-item');
-            
-            const res = resourcesMap[ref];
+
+            const res = resources[ref];
             const iframe = document.getElementById('preview-iframe');
             const placeholder = document.getElementById('preview-placeholder');
 
+            if (activeBlob) URL.revokeObjectURL(activeBlob);
+
             try {
-                if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
-
-                let targetUrl = "";
-                let isExternal = false;
-
                 if (res.type.includes('imswl')) {
                     const xml = await currentZip.file(res.href).async("string");
-                    targetUrl = new DOMParser().parseFromString(xml, "text/xml").getElementsByTagName("url")[0]?.getAttribute("href");
-                    isExternal = true;
-                } else {
-                    const file = currentZip.file(res.href);
-                    if (!file) throw new Error("File not found in package.");
-                    
-                    const blob = await file.async("blob");
-                    const ext = res.href.split('.').pop().toLowerCase();
-                    const mime = ext === 'pdf' ? 'application/pdf' : 'text/html';
-                    activeBlobUrl = URL.createObjectURL(new Blob([blob], { type: mime }));
-                    targetUrl = activeBlobUrl;
-                }
-
-                if (isExternal) {
-                    placeholder.innerHTML = `
-                        <div class="bg-white p-6 rounded-2xl shadow-lg border border-slate-200 text-center max-w-xs">
-                            <i data-lucide="external-link" class="w-10 h-10 text-blue-500 mx-auto mb-4"></i>
-                            <h4 class="font-bold text-slate-800 mb-2">Web Link</h4>
-                            <p class="text-xs text-slate-500 mb-4 truncate">${targetUrl}</p>
-                            <a href="${targetUrl}" target="_blank" class="block w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-bold">Open Website</a>
-                        </div>
-                    `;
+                    const url = new DOMParser().parseFromString(xml, "text/xml").querySelector('url')?.getAttribute('href');
+                    placeholder.innerHTML = `<div class="p-6 bg-white rounded-2xl shadow-sm border border-slate-200 text-center">
+                        <p class="text-sm font-bold mb-4">Web Link</p>
+                        <a href="${url}" target="_blank" class="text-blue-600 underline text-xs break-all">${url}</a>
+                    </div>`;
                     iframe.classList.add('hidden');
                     placeholder.classList.remove('hidden');
                 } else {
-                    iframe.src = targetUrl;
+                    const file = currentZip.file(res.href);
+                    const blob = await file.async("blob");
+                    const mime = res.href.endsWith('.pdf') ? 'application/pdf' : 'text/html';
+                    activeBlob = URL.createObjectURL(new Blob([blob], { type: mime }));
+                    iframe.src = activeBlob;
                     iframe.classList.remove('hidden');
                     placeholder.classList.add('hidden');
                 }
 
-                document.getElementById('active-item-title').innerText = title;
-                document.getElementById('viewer-actions').classList.remove('hidden');
-                document.getElementById('open-new-tab').onclick = () => window.open(targetUrl, '_blank');
+                document.getElementById('active-title').innerText = title;
+                
+                // On Mobile: Hide menu after selection
+                if (window.innerWidth < 768) toggleMobileView();
 
-                // Responsive Action: Switch to Content View on mobile
-                if (window.innerWidth < 768) {
-                    setMobileView('content');
-                }
-
-            } catch (err) {
-                placeholder.innerHTML = `<p class="text-red-500 text-xs">Error: ${err.message}</p>`;
-            }
-            lucide.createIcons();
-        }
-
-        // --- View Logic ---
-        function toggleMobileView() {
-            setMobileView(isMobileTreeView ? 'content' : 'tree');
-        }
-
-        function setMobileView(view) {
-            const sidebar = document.getElementById('sidebar');
-            const toggleText = document.getElementById('toggle-text');
-            const toggleIcon = document.getElementById('toggle-icon');
-
-            if (view === 'tree') {
-                isMobileTreeView = true;
-                sidebar.style.transform = 'translateX(0)';
-                toggleText.innerText = "Show Preview";
-                toggleIcon.setAttribute('data-lucide', 'eye');
-            } else {
-                isMobileTreeView = false;
-                sidebar.style.transform = 'translateX(-100%)';
-                toggleText.innerText = "Show List";
-                toggleIcon.setAttribute('data-lucide', 'list');
+            } catch (e) {
+                placeholder.innerHTML = `<p class="text-red-500">Error loading file</p>`;
             }
             lucide.createIcons();
         }
 
         function getIcon(ref) {
-            if (!ref || !resourcesMap[ref]) return 'file';
-            const t = resourcesMap[ref].type;
-            if (t.includes('webcontent')) return 'file-text';
-            if (t.includes('imsdt')) return 'message-circle';
-            if (t.includes('imswl')) return 'link';
-            return 'file';
-        }
-
-        function showError(msg) {
-            document.getElementById('error-message').innerText = msg;
-            document.getElementById('error-modal').classList.remove('hidden');
-        }
-
-        function closeError() {
-            document.getElementById('error-modal').classList.add('hidden');
-        }
-
-        function resetApp() {
-            location.reload();
+            if (!ref) return 'folder';
+            const type = resources[ref]?.type || '';
+            if (type.includes('imswl')) return 'link';
+            if (type.includes('imsdt')) return 'message-square';
+            return 'file-text';
         }
     </script>
 </body>
