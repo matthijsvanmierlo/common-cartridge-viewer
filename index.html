@@ -11,7 +11,6 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
         
-        /* Mobile Overlay Logic */
         #sidebar {
             transition: transform 0.3s ease-in-out;
             z-index: 40;
@@ -33,7 +32,6 @@
         
         iframe { border: none; width: 100%; height: 100%; background: white; }
 
-        /* Loader Animation */
         .loader {
             border: 3px solid #f3f3f3;
             border-top: 3px solid #3b82f6;
@@ -43,25 +41,51 @@
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+
+        .markdown-copied-popup {
+            animation: fadeUp 2s forwards;
+        }
+        @keyframes fadeUp {
+            0% { opacity: 0; transform: translateY(10px); }
+            10% { opacity: 1; transform: translateY(0); }
+            90% { opacity: 1; transform: translateY(0); }
+            100% { opacity: 0; transform: translateY(-10px); }
+        }
     </style>
 </head>
 <body class="h-screen flex flex-col overflow-hidden">
 
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="hidden fixed inset-0 z-[100] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center">
-        <div class="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4">
+        <div class="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4 text-center">
             <div class="loader"></div>
-            <p class="text-sm font-semibold text-slate-700">Unpacking Cartridge...</p>
+            <div>
+                <p id="loading-text" class="text-sm font-semibold text-slate-700">Processing Cartridge...</p>
+                <p class="text-[10px] text-slate-400 mt-1">Linking local assets and images...</p>
+            </div>
         </div>
     </div>
 
+    <!-- Notification Toast -->
+    <div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-800 text-white px-4 py-2 rounded-full text-xs font-bold shadow-2xl markdown-copied-popup flex items-center gap-2">
+        <i data-lucide="check-circle" class="w-4 h-4 text-green-400"></i>
+        <span id="toast-message">Copied as Markdown!</span>
+    </div>
+
     <!-- Header -->
-    <header class="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between z-50 shrink-0">
+    <header class="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between z-50 shrink-0 shadow-sm">
         <div class="flex items-center gap-3">
+            <button id="back-to-library" onclick="showLibrary()" class="hidden p-2 hover:bg-slate-100 rounded-lg text-slate-500 mr-1 transition-colors">
+                <i data-lucide="layout-grid" class="w-5 h-5"></i>
+            </button>
             <div class="bg-blue-600 p-2 rounded-lg shadow-sm">
                 <i data-lucide="package" class="text-white w-5 h-5"></i>
             </div>
-            <h1 class="text-sm font-bold text-slate-800 hidden xs:block">IMSCC Explorer</h1>
+            <h1 class="text-sm font-bold text-slate-800 hidden sm:block">IMSCC Explorer</h1>
         </div>
         
         <div class="flex items-center gap-2">
@@ -72,49 +96,97 @@
 
             <label for="file-upload" class="cursor-pointer bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg active:scale-95 transition-transform">
                 <i data-lucide="plus" class="w-4 h-4"></i>
-                Open
+                Open File
             </label>
             <input id="file-upload" type="file" accept=".imscc,.zip" class="hidden" onchange="handleFileSelect(event)">
         </div>
     </header>
 
     <main class="flex-1 flex overflow-hidden relative">
-        <!-- Landing State -->
+        <!-- Landing State / Dropzone -->
         <div id="dropzone" class="absolute inset-0 z-[45] bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
             <div class="max-w-xs w-full">
                 <div class="mb-6 bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
                     <i data-lucide="upload-cloud" class="w-12 h-12 text-blue-500 mx-auto mb-4"></i>
-                    <h2 class="text-lg font-bold text-slate-800 mb-2">Upload Cartridge</h2>
-                    <p class="text-slate-500 text-xs leading-relaxed">Select a .imscc file exported from Schoology or Canvas to preview content.</p>
+                    <h2 class="text-lg font-bold text-slate-800 mb-2">IMSCC Explorer</h2>
+                    <p class="text-slate-500 text-xs leading-relaxed text-balance">View Schoology or Canvas exports. All media is relinked locally for full preview support.</p>
                 </div>
             </div>
         </div>
 
-        <!-- App Workspace -->
+        <!-- Library View (Collection Picker) -->
+        <div id="library-view" class="hidden absolute inset-0 z-[44] bg-slate-50 overflow-y-auto p-6">
+            <div class="max-w-5xl mx-auto">
+                <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+                    <div>
+                        <h2 class="text-2xl font-bold text-slate-800">Resource Library</h2>
+                        <p class="text-sm text-slate-500">Search and select a course or resource collection.</p>
+                    </div>
+                    <div class="relative w-full md:w-80">
+                        <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
+                        <input type="text" id="library-search" oninput="filterLibrary()" placeholder="Search collections..." class="w-full bg-white border border-slate-200 pl-10 pr-4 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                    </div>
+                </div>
+                <div id="library-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <!-- Collection Cards -->
+                </div>
+                <div id="library-empty" class="hidden flex flex-col items-center justify-center py-20 text-slate-400">
+                    <i data-lucide="search-x" class="w-12 h-12 opacity-20 mb-4"></i>
+                    <p>No collections match your search</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Workspace -->
         <div id="app-content" class="hidden flex w-full h-full relative">
-            
             <!-- Sidebar Explorer -->
             <aside id="sidebar" class="sidebar-visible absolute inset-0 md:relative md:translate-x-0 w-full md:w-80 border-r border-slate-200 bg-white flex flex-col">
-                <div class="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Navigation</span>
-                    <span id="item-count" class="text-[10px] font-bold text-blue-500"></span>
+                <div class="p-4 border-b border-slate-100 flex flex-col gap-1 bg-slate-50/50">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Navigation</span>
+                        <span id="item-count" class="text-[10px] font-bold text-blue-500"></span>
+                    </div>
+                    <h3 id="current-root-title" class="text-xs font-bold text-slate-800 truncate">Collection Name</h3>
                 </div>
-                <div id="tree-container" class="flex-1 overflow-y-auto custom-scrollbar p-2 pb-24">
-                    <!-- Dynamic Items -->
-                </div>
+                <div id="tree-container" class="flex-1 overflow-y-auto custom-scrollbar p-2 pb-24"></div>
             </aside>
 
             <!-- Content Viewer -->
             <section id="viewer" class="flex-1 flex flex-col bg-slate-100 w-full overflow-hidden">
-                <div class="h-10 bg-white border-b border-slate-200 px-4 flex items-center shrink-0">
-                    <p id="active-title" class="text-[11px] font-medium text-slate-500 truncate italic">No file selected</p>
+                <div class="h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shrink-0">
+                    <div class="flex flex-col min-w-0 mr-4">
+                        <p id="active-title" class="text-[11px] font-bold text-slate-800 truncate leading-tight">No file selected</p>
+                        <p id="active-type" class="text-[9px] text-slate-400 uppercase tracking-tighter">Resource</p>
+                    </div>
+                    
+                    <div class="flex items-center gap-2 shrink-0">
+                        <div id="attachment-indicator" class="hidden flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-600 rounded-lg border border-amber-100 cursor-pointer hover:bg-amber-100 transition-colors" onclick="showAttachmentList()">
+                            <i data-lucide="paperclip" class="w-3.5 h-3.5"></i>
+                            <span class="text-[10px] font-bold" id="attachment-count">0</span>
+                        </div>
+                        
+                        <button id="copy-markdown-btn" onclick="copyContentToMarkdown()" class="hidden flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors text-[10px] font-bold">
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                            <span class="hidden sm:inline">Copy as Markdown</span>
+                        </button>
+                    </div>
                 </div>
+                
                 <div class="flex-1 relative">
-                    <div id="preview-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
-                        <i data-lucide="book-open" class="w-12 h-12 opacity-10 mb-4"></i>
-                        <p class="text-sm">Select a resource to preview</p>
+                    <div id="preview-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center bg-slate-50">
+                        <i data-lucide="file-search" class="w-12 h-12 opacity-10 mb-4"></i>
+                        <p id="placeholder-text" class="text-sm">Select a resource to preview its content</p>
                     </div>
                     <iframe id="preview-iframe" class="hidden" sandbox="allow-scripts allow-same-origin"></iframe>
+                    
+                    <!-- Attachment Sidebar Overlay -->
+                    <div id="attachment-panel" class="hidden absolute top-0 right-0 bottom-0 w-64 bg-white border-l border-slate-200 shadow-2xl z-20 flex flex-col">
+                        <div class="p-3 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                            <h4 class="text-[10px] font-bold text-slate-500 uppercase">Linked Files</h4>
+                            <button onclick="closeAttachmentList()"><i data-lucide="x" class="w-4 h-4 text-slate-400"></i></button>
+                        </div>
+                        <div id="attachment-list" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+                    </div>
                 </div>
             </section>
         </div>
@@ -124,7 +196,9 @@
         let currentZip = null;
         let resources = {};
         let activeBlob = null;
-        let isMenuOpen = true;
+        let assetBlobs = []; 
+        let organizations = []; 
+        let currentSelection = { ref: null, title: null };
 
         window.onload = () => lucide.createIcons();
 
@@ -132,7 +206,6 @@
             const sidebar = document.getElementById('sidebar');
             const icon = document.getElementById('toggle-icon');
             const text = document.getElementById('toggle-text');
-
             if (sidebar.classList.contains('sidebar-hidden')) {
                 sidebar.classList.remove('sidebar-hidden');
                 sidebar.classList.add('sidebar-visible');
@@ -147,134 +220,306 @@
             lucide.createIcons();
         }
 
+        function showAttachmentList() { document.getElementById('attachment-panel').classList.remove('hidden'); }
+        function closeAttachmentList() { document.getElementById('attachment-panel').classList.add('hidden'); }
+
         async function handleFileSelect(e) {
             const file = e.target.files[0];
             if (!file) return;
-
             const loader = document.getElementById('loading-overlay');
             loader.classList.remove('hidden');
-
+            
             try {
                 currentZip = await JSZip.loadAsync(file);
-                const manifest = await currentZip.file("imsmanifest.xml")?.async("string");
-                if (!manifest) throw new Error("Manifest not found.");
+                const manifestText = await currentZip.file("imsmanifest.xml")?.async("string");
+                if (!manifestText) throw new Error("Manifest not found.");
 
                 const parser = new DOMParser();
-                const doc = parser.parseFromString(manifest, "text/xml");
+                const doc = parser.parseFromString(manifestText, "text/xml");
 
-                // Parse Resources
                 resources = {};
                 Array.from(doc.querySelectorAll('resource')).forEach(res => {
-                    resources[res.getAttribute('identifier')] = {
+                    const id = res.getAttribute('identifier');
+                    const files = Array.from(res.querySelectorAll('file')).map(f => f.getAttribute('href'));
+                    resources[id] = {
                         type: res.getAttribute('type'),
-                        href: res.getAttribute('href')
+                        href: res.getAttribute('href'),
+                        files: files
                     };
                 });
 
-                // Build Tree
-                const treeContainer = document.getElementById('tree-container');
-                treeContainer.innerHTML = '';
-                const items = doc.querySelector('organization')?.querySelectorAll('item') || [];
-                
-                buildTree(items, treeContainer);
-                document.getElementById('item-count').innerText = `${items.length} Items`;
+                organizations = Array.from(doc.querySelectorAll('organization')).map(org => {
+                    const items = Array.from(org.children).filter(c => c.tagName === 'item');
+                    const totalItems = items.length;
+                    const itemsWithContent = items.filter(i => i.getAttribute('identifierref')).length;
+                    const itemsWithChildren = items.filter(i => i.getElementsByTagName('item').length > 0).length;
+                    
+                    let type = "Resource Collection";
+                    if (itemsWithContent > totalItems * 0.4) type = "Course";
+                    else if (itemsWithChildren === totalItems) type = "Resource Folders";
 
-                // Switch UI
+                    return {
+                        id: org.getAttribute('identifier'),
+                        title: org.querySelector('title')?.textContent || "Unnamed Collection",
+                        type: type,
+                        items: items
+                    };
+                });
+
                 document.getElementById('dropzone').classList.add('hidden');
-                document.getElementById('app-content').classList.remove('hidden');
-                document.getElementById('mobile-toggle').classList.remove('hidden');
+                document.getElementById('library-search').value = '';
                 
-                // Force mobile view to show the tree initially
-                if (window.innerWidth < 768) {
-                    const sidebar = document.getElementById('sidebar');
-                    sidebar.classList.remove('sidebar-hidden');
-                    sidebar.classList.add('sidebar-visible');
-                }
+                if (organizations.length > 1) renderLibraryGrid();
+                else if (organizations.length === 1) loadCollection(0);
+                else throw new Error("No content found.");
 
                 lucide.createIcons();
-            } catch (err) {
-                alert("Error: " + err.message);
-            } finally {
-                loader.classList.add('hidden');
-            }
+            } catch (err) { alert("Error: " + err.message); }
+            finally { loader.classList.add('hidden'); }
+        }
+
+        function renderLibraryGrid(filter = '') {
+            const grid = document.getElementById('library-grid');
+            const emptyState = document.getElementById('library-empty');
+            grid.innerHTML = '';
+            document.getElementById('library-view').classList.remove('hidden');
+            document.getElementById('app-content').classList.add('hidden');
+            document.getElementById('back-to-library').classList.add('hidden');
+
+            const filtered = organizations.filter(org => org.title.toLowerCase().includes(filter.toLowerCase()));
+            if (filtered.length === 0) emptyState.classList.remove('hidden');
+            else emptyState.classList.add('hidden');
+
+            filtered.forEach((org) => {
+                const orgIndex = organizations.indexOf(org);
+                const card = document.createElement('div');
+                card.className = "bg-white p-6 rounded-2xl border border-slate-200 hover:border-blue-500 cursor-pointer transition-all card-shadow hover:-translate-y-1 flex flex-col h-full";
+                card.innerHTML = `
+                    <div class="flex items-start gap-4 mb-4">
+                        <div class="p-3 bg-blue-50 text-blue-600 rounded-xl shrink-0"><i data-lucide="${org.type === 'Course' ? 'graduation-cap' : 'folder-tree'}" class="w-6 h-6"></i></div>
+                        <div class="flex-1 truncate">
+                            <h4 class="font-bold text-slate-800 text-sm whitespace-normal leading-tight line-clamp-2">${org.title}</h4>
+                            <div class="mt-2 flex flex-wrap gap-2">
+                                <span class="text-[9px] font-bold px-2 py-0.5 rounded-full ${org.type === 'Course' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'} uppercase">${org.type}</span>
+                                <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-50 text-slate-400 uppercase">${org.items.length} Items</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-auto"><button class="w-full py-2.5 bg-slate-50 text-slate-600 text-xs font-bold rounded-xl hover:bg-blue-600 hover:text-white transition-colors">Open</button></div>
+                `;
+                card.onclick = () => loadCollection(orgIndex);
+                grid.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        function filterLibrary() { renderLibraryGrid(document.getElementById('library-search').value); }
+        function showLibrary() { if (organizations.length > 1) renderLibraryGrid(); }
+
+        function loadCollection(index) {
+            const org = organizations[index];
+            const treeContainer = document.getElementById('tree-container');
+            treeContainer.innerHTML = '';
+            document.getElementById('current-root-title').innerText = org.title;
+            document.getElementById('library-view').classList.add('hidden');
+            document.getElementById('app-content').classList.remove('hidden');
+            document.getElementById('mobile-toggle').classList.remove('hidden');
+            if (organizations.length > 1) document.getElementById('back-to-library').classList.remove('hidden');
+            buildTree(org.items, treeContainer);
+            document.getElementById('item-count').innerText = `${org.items.length} Root Items`;
+            if (window.innerWidth < 768) toggleMobileView();
+            clearPreview();
+            lucide.createIcons();
         }
 
         function buildTree(nodes, container, depth = 0) {
             Array.from(nodes).forEach(node => {
-                if (node.parentElement.tagName !== 'organization' && node.parentElement.tagName !== 'item') return;
-
                 const title = node.querySelector('title')?.textContent || "Untitled";
                 const ref = node.getAttribute('identifierref');
                 const children = Array.from(node.children).filter(c => c.tagName === 'item');
-
                 const el = document.createElement('div');
                 el.className = `flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors hover:bg-slate-50 mb-1`;
                 el.style.marginLeft = `${depth * 12}px`;
-
                 const icon = children.length > 0 ? 'folder' : getIcon(ref);
-                el.innerHTML = `
-                    <i data-lucide="${icon}" class="w-4 h-4 shrink-0 ${children.length > 0 ? 'text-amber-400' : 'text-slate-400'}"></i>
-                    <span class="text-xs font-semibold text-slate-700 truncate">${title}</span>
-                `;
-
-                if (ref) {
-                    el.onclick = () => loadResource(el, ref, title);
-                }
-                
+                el.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4 shrink-0 ${children.length > 0 ? 'text-amber-400' : 'text-slate-400'}"></i>
+                               <span class="text-xs font-semibold text-slate-700 truncate">${title}</span>`;
+                if (ref) el.onclick = (e) => { e.stopPropagation(); loadResource(el, ref, title); };
                 container.appendChild(el);
                 if (children.length > 0) buildTree(children, container, depth + 1);
             });
         }
 
-        async function loadResource(element, ref, title) {
-            document.querySelectorAll('#tree-container > div').forEach(d => d.classList.remove('active-item'));
-            element.classList.add('active-item');
+        function clearPreview() {
+            const iframe = document.getElementById('preview-iframe');
+            if (activeBlob) URL.revokeObjectURL(activeBlob);
+            assetBlobs.forEach(url => URL.revokeObjectURL(url));
+            assetBlobs = [];
+            activeBlob = null;
+            currentSelection = { ref: null, title: null };
+            iframe.src = "about:blank";
+            iframe.classList.add('hidden');
+            document.getElementById('preview-placeholder').classList.remove('hidden');
+            document.getElementById('attachment-indicator').classList.add('hidden');
+            document.getElementById('copy-markdown-btn').classList.add('hidden');
+            document.getElementById('active-title').innerText = "No file selected";
+            closeAttachmentList();
+        }
 
+        /**
+         * Robust Path Resolver handles relative navigation and URL decoding
+         */
+        function resolvePath(basePath, relativePath) {
+            if (!relativePath || relativePath.startsWith('http') || relativePath.startsWith('data:')) return null;
+            
+            // ZIP files are case-sensitive and use literal names. HTML uses encoded names.
+            const decodedRel = decodeURIComponent(relativePath);
+            
+            const baseParts = basePath.split('/');
+            baseParts.pop(); 
+            
+            const relParts = decodedRel.split('/');
+            for (const part of relParts) {
+                if (!part || part === '.') continue;
+                if (part === '..') baseParts.pop();
+                else baseParts.push(part);
+            }
+            return baseParts.join('/');
+        }
+
+        async function loadResource(element, ref, title) {
+            document.querySelectorAll('#tree-container div').forEach(d => d.classList.remove('active-item'));
+            element.classList.add('active-item');
+            clearPreview();
+
+            currentSelection = { ref, title };
             const res = resources[ref];
             const iframe = document.getElementById('preview-iframe');
             const placeholder = document.getElementById('preview-placeholder');
+            const copyBtn = document.getElementById('copy-markdown-btn');
 
-            if (activeBlob) URL.revokeObjectURL(activeBlob);
+            document.getElementById('active-title').innerText = title;
+            document.getElementById('active-type').innerText = res.type?.split('/').pop() || 'Unknown';
+
+            if (res.files?.length > 1) {
+                document.getElementById('attachment-indicator').classList.remove('hidden');
+                document.getElementById('attachment-count').innerText = res.files.length;
+                renderAttachments(res.files);
+            }
 
             try {
+                if (!res.href) throw new Error("No path.");
+                const file = currentZip.file(res.href);
+                if (!file) throw new Error("File missing.");
+
                 if (res.type.includes('imswl')) {
-                    const xml = await currentZip.file(res.href).async("string");
+                    const xml = await file.async("string");
                     const url = new DOMParser().parseFromString(xml, "text/xml").querySelector('url')?.getAttribute('href');
-                    placeholder.innerHTML = `<div class="p-6 bg-white rounded-2xl shadow-sm border border-slate-200 text-center">
-                        <p class="text-sm font-bold mb-4">Web Link</p>
-                        <a href="${url}" target="_blank" class="text-blue-600 underline text-xs break-all">${url}</a>
-                    </div>`;
-                    iframe.classList.add('hidden');
-                    placeholder.classList.remove('hidden');
+                    placeholder.innerHTML = `<div class="p-6 bg-white rounded-2xl shadow-sm border border-slate-200 text-center"><p class="text-sm font-bold mb-4">External Link</p><a href="${url}" target="_blank" class="text-blue-600 underline text-xs break-all">${url}</a></div>`;
                 } else {
-                    const file = currentZip.file(res.href);
-                    const blob = await file.async("blob");
-                    const mime = res.href.endsWith('.pdf') ? 'application/pdf' : 'text/html';
-                    activeBlob = URL.createObjectURL(new Blob([blob], { type: mime }));
+                    const ext = res.href.split('.').pop().toLowerCase();
+                    if (['html', 'htm'].includes(ext)) {
+                        copyBtn.classList.remove('hidden');
+                        let html = await file.async("string");
+                        const doc = new DOMParser().parseFromString(html, 'text/html');
+                        
+                        // Robust Asset Re-linking
+                        const selectors = 'img[src], video[src], audio[src], source[src], link[rel="stylesheet"]';
+                        const assets = Array.from(doc.querySelectorAll(selectors));
+                        
+                        for (const tag of assets) {
+                            const attr = tag.tagName === 'LINK' ? 'href' : 'src';
+                            const rawPath = tag.getAttribute(attr);
+                            const solved = resolvePath(res.href, rawPath);
+                            
+                            if (solved && currentZip.file(solved)) {
+                                const assetFile = currentZip.file(solved);
+                                const assetBlob = await assetFile.async("blob");
+                                const type = tag.tagName === 'LINK' ? 'text/css' : assetBlob.type;
+                                const url = URL.createObjectURL(new Blob([assetBlob], { type }));
+                                assetBlobs.push(url);
+                                tag.setAttribute(attr, url);
+                            }
+                        }
+
+                        activeBlob = URL.createObjectURL(new Blob([doc.documentElement.outerHTML], { type: 'text/html' }));
+                    } else {
+                        const blob = await file.async("blob");
+                        const mime = ext === 'pdf' ? 'application/pdf' : blob.type;
+                        activeBlob = URL.createObjectURL(new Blob([blob], { type: mime }));
+                    }
                     iframe.src = activeBlob;
                     iframe.classList.remove('hidden');
                     placeholder.classList.add('hidden');
                 }
-
-                document.getElementById('active-title').innerText = title;
-                
-                // On Mobile: Hide menu after selection
                 if (window.innerWidth < 768) toggleMobileView();
-
-            } catch (e) {
-                placeholder.innerHTML = `<p class="text-red-500">Error loading file</p>`;
+            } catch (e) { 
+                placeholder.innerHTML = `<span class="text-red-500 font-bold">Preview Error</span><br/><span class="text-[10px] text-slate-400">${e.message}</span>`;
             }
+            lucide.createIcons();
+        }
+
+        async function copyContentToMarkdown() {
+            if (!currentSelection.ref) return;
+            try {
+                const res = resources[currentSelection.ref];
+                const html = await currentZip.file(res.href).async("string");
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                let md = `# ${currentSelection.title}\n\n`;
+                
+                const traverse = (node) => {
+                    if (node.nodeType === 3) return node.textContent.trim();
+                    if (node.nodeType !== 1) return "";
+                    const tag = node.tagName;
+                    const children = Array.from(node.childNodes).map(traverse).join("");
+                    if (['H1','H2','H3'].includes(tag)) return `\n${'#'.repeat(tag[1])} ${children}\n`;
+                    if (tag === 'P') return `\n${children}\n`;
+                    if (tag === 'STRONG' || tag === 'B') return ` **${children}** `;
+                    if (tag === 'EM' || tag === 'I') return ` *${children}* `;
+                    if (tag === 'LI') return `- ${children}\n`;
+                    if (tag === 'A') return ` [${children}](${node.getAttribute('href')}) `;
+                    if (tag === 'IMG') return ` ![image](${node.getAttribute('src')}) `;
+                    return children;
+                };
+                
+                md += traverse(doc.body);
+                const el = document.createElement("textarea");
+                el.value = md.replace(/\n\s*\n/g, '\n\n').trim();
+                document.body.appendChild(el); el.select();
+                document.execCommand('copy'); document.body.removeChild(el);
+                showToast("Copied as Markdown!");
+            } catch (e) { showToast("Copy failed", "alert-triangle"); }
+        }
+
+        function showToast(m) {
+            const t = document.getElementById('toast');
+            document.getElementById('toast-message').innerText = m;
+            t.classList.remove('hidden');
+            setTimeout(() => t.classList.add('hidden'), 2500);
+        }
+
+        function renderAttachments(files) {
+            const list = document.getElementById('attachment-list');
+            list.innerHTML = '';
+            files.forEach(path => {
+                const item = document.createElement('div');
+                item.className = "flex items-center gap-2 p-2 rounded bg-slate-50 hover:bg-blue-50 cursor-pointer transition-colors text-[10px]";
+                item.innerHTML = `<i data-lucide="file" class="w-3 h-3 text-slate-400"></i><span class="truncate">${path.split('/').pop()}</span>`;
+                item.onclick = async () => {
+                    const b = await currentZip.file(path).async("blob");
+                    window.open(URL.createObjectURL(b), '_blank');
+                };
+                list.appendChild(item);
+            });
             lucide.createIcons();
         }
 
         function getIcon(ref) {
             if (!ref) return 'folder';
-            const type = resources[ref]?.type || '';
-            if (type.includes('imswl')) return 'link';
-            if (type.includes('imsdt')) return 'message-square';
+            const t = resources[ref]?.type || '';
+            if (t.includes('imswl')) return 'link';
+            if (t.includes('imsdt')) return 'message-square';
             return 'file-text';
         }
     </script>
 </body>
 </html>
-
