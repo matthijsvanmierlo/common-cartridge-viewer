@@ -165,11 +165,11 @@
                             <span class="text-[10px] font-bold" id="attachment-count">0</span>
                         </div>
                         
-                        <!-- File Actions (Download/Copy) -->
+                        <!-- File Actions -->
                         <div id="viewer-actions-group" class="flex items-center gap-2">
                             <button id="download-file-btn" onclick="downloadActiveResource()" class="hidden flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-[10px] font-bold">
                                 <i data-lucide="download" class="w-3.5 h-3.5"></i>
-                                <span class="hidden sm:inline">Download File</span>
+                                <span class="hidden sm:inline">Download</span>
                             </button>
                             <button id="copy-markdown-btn" onclick="copyContentToMarkdown()" class="hidden flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors text-[10px] font-bold">
                                 <i data-lucide="copy" class="w-3.5 h-3.5"></i>
@@ -184,15 +184,18 @@
                         <i data-lucide="file-search" class="w-12 h-12 opacity-10 mb-4"></i>
                         <p id="placeholder-text" class="text-sm">Select a resource to preview its content</p>
                     </div>
-                    <iframe id="preview-iframe" class="hidden" sandbox="allow-scripts allow-same-origin"></iframe>
+                    <iframe id="preview-iframe" class="hidden" sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-modals allow-popups-to-escape-sandbox"></iframe>
                     
                     <!-- Attachment Sidebar Overlay -->
-                    <div id="attachment-panel" class="hidden absolute top-0 right-0 bottom-0 w-64 bg-white border-l border-slate-200 shadow-2xl z-20 flex flex-col">
-                        <div class="p-3 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                            <h4 class="text-[10px] font-bold text-slate-500 uppercase">Linked Files</h4>
-                            <button onclick="closeAttachmentList()"><i data-lucide="x" class="w-4 h-4 text-slate-400"></i></button>
+                    <div id="attachment-panel" class="hidden absolute top-0 right-0 bottom-0 w-72 bg-white border-l border-slate-200 shadow-2xl z-20 flex flex-col">
+                        <div class="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                            <div>
+                                <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Resource Files</h4>
+                                <p class="text-[9px] text-slate-400">Attachments and assets</p>
+                            </div>
+                            <button onclick="closeAttachmentList()" class="p-1 hover:bg-slate-200 rounded-md transition-colors"><i data-lucide="x" class="w-4 h-4 text-slate-500"></i></button>
                         </div>
-                        <div id="attachment-list" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+                        <div id="attachment-list" class="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar"></div>
                     </div>
                 </div>
             </section>
@@ -259,11 +262,9 @@
                     const items = Array.from(org.children).filter(c => c.tagName === 'item');
                     const totalItems = items.length;
                     const itemsWithContent = items.filter(i => i.getAttribute('identifierref')).length;
-                    const itemsWithChildren = items.filter(i => i.getElementsByTagName('item').length > 0).length;
                     
                     let type = "Resource Collection";
                     if (itemsWithContent > totalItems * 0.4) type = "Course";
-                    else if (itemsWithChildren === totalItems) type = "Resource Folders";
 
                     return {
                         id: org.getAttribute('identifier'),
@@ -333,7 +334,7 @@
             document.getElementById('mobile-toggle').classList.remove('hidden');
             if (organizations.length > 1) document.getElementById('back-to-library').classList.remove('hidden');
             buildTree(org.items, treeContainer);
-            document.getElementById('item-count').innerText = `${org.items.length} Root Items`;
+            document.getElementById('item-count').innerText = `${org.items.length} Items`;
             if (window.innerWidth < 768) toggleMobileView();
             clearPreview();
             lucide.createIcons();
@@ -366,6 +367,7 @@
             iframe.src = "about:blank";
             iframe.classList.add('hidden');
             document.getElementById('preview-placeholder').classList.remove('hidden');
+            document.getElementById('placeholder-text').innerText = "Select a resource to preview its content";
             document.getElementById('attachment-indicator').classList.add('hidden');
             document.getElementById('copy-markdown-btn').classList.add('hidden');
             document.getElementById('download-file-btn').classList.add('hidden');
@@ -419,25 +421,28 @@
             document.getElementById('active-title').innerText = title;
             document.getElementById('active-type').innerText = res?.type?.split('/').pop() || 'Unknown';
 
-            if (res?.files?.length > 1) {
+            // Aggregate attachments (main resource files + any extra files listed)
+            const attachments = res?.files || [];
+            if (attachments.length > 0) {
                 document.getElementById('attachment-indicator').classList.remove('hidden');
-                document.getElementById('attachment-count').innerText = res.files.length;
-                renderAttachments(res.files);
+                document.getElementById('attachment-count').innerText = attachments.length;
+                renderAttachments(attachments);
             }
 
             try {
-                // If it's a web link, handle metadata
                 if (res?.type?.includes('imswl')) {
                     const xmlText = await currentZip.file(res.href).async("string");
                     const url = new DOMParser().parseFromString(xmlText, "text/xml").querySelector('url')?.getAttribute('href');
                     placeholder.innerHTML = `
-                        <div class="p-8 bg-white rounded-2xl shadow-sm border border-slate-200 text-center max-w-sm mx-auto">
-                            <i data-lucide="link" class="w-10 h-10 text-blue-500 mx-auto mb-4"></i>
-                            <p class="text-sm font-bold mb-2">Web Link</p>
-                            <p class="text-xs text-slate-400 mb-6 truncate">${url}</p>
-                            <a href="${url}" target="_blank" class="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-xl font-bold text-xs shadow-md active:scale-95 transition-all">
-                                Open External Website
-                                <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                        <div class="p-8 bg-white rounded-2xl shadow-xl border border-slate-200 text-center max-w-sm mx-auto">
+                            <div class="p-4 bg-blue-50 text-blue-600 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-6">
+                                <i data-lucide="link" class="w-8 h-8"></i>
+                            </div>
+                            <h3 class="text-lg font-bold text-slate-800 mb-2">External Web Link</h3>
+                            <p class="text-xs text-slate-400 mb-8 break-all px-4">${url}</p>
+                            <a href="${url}" target="_blank" class="inline-flex items-center gap-3 bg-blue-600 text-white px-8 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-blue-200 active:scale-95 transition-all">
+                                Open Website
+                                <i data-lucide="external-link" class="w-4 h-4"></i>
                             </a>
                         </div>`;
                     iframe.classList.add('hidden');
@@ -447,19 +452,13 @@
                     return;
                 }
 
-                if (!res?.href) {
-                    throw new Error("This item does not contain a viewable file.");
-                }
+                if (!res?.href) throw new Error("This resource contains no direct file.");
 
                 const file = currentZip.file(res.href);
-                if (!file) throw new Error("File missing in package.");
+                if (!file) throw new Error("File not found in package.");
 
                 const ext = res.href.split('.').pop().toLowerCase();
-                
-                // Show download button for PDFs and other files
-                if (ext === 'pdf' || !['html', 'htm'].includes(ext)) {
-                    downloadBtn.classList.remove('hidden');
-                }
+                if (ext === 'pdf' || !['html', 'htm'].includes(ext)) downloadBtn.classList.remove('hidden');
 
                 if (['html', 'htm'].includes(ext)) {
                     copyBtn.classList.remove('hidden');
@@ -488,23 +487,45 @@
                 } else if (ext === 'pdf') {
                     const blob = await file.async("blob");
                     activeBlob = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-                    iframe.src = activeBlob;
-                    iframe.classList.remove('hidden');
-                    placeholder.classList.add('hidden');
+                    
+                    // Specific PDF UI for Chrome compatibility
+                    placeholder.innerHTML = `
+                        <div class="flex flex-col items-center justify-center h-full p-8 text-center bg-slate-100">
+                             <div class="p-8 bg-white rounded-3xl shadow-xl max-w-sm w-full border border-slate-200">
+                                <div class="bg-red-50 text-red-500 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                                    <i data-lucide="file-text" class="w-8 h-8"></i>
+                                </div>
+                                <h3 class="text-xl font-bold text-slate-800 mb-2">PDF Document</h3>
+                                <p class="text-xs text-slate-500 mb-8 px-4 leading-relaxed">Browsers may block embedded PDFs from local files. Click below to view or save.</p>
+                                
+                                <div class="flex flex-col gap-3">
+                                    <button onclick="window.open(activeBlob, '_blank')" class="bg-slate-900 text-white py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-slate-800 transition-colors">
+                                        <i data-lucide="eye" class="w-4 h-4"></i>
+                                        Preview in New Tab
+                                    </button>
+                                    <button onclick="downloadActiveResource()" class="bg-blue-600 text-white py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-blue-500 transition-colors shadow-lg shadow-blue-100">
+                                        <i data-lucide="download" class="w-4 h-4"></i>
+                                        Download PDF
+                                    </button>
+                                </div>
+                             </div>
+                        </div>`;
+                    iframe.classList.add('hidden');
+                    placeholder.classList.remove('hidden');
+                    lucide.createIcons();
                 } else if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) {
                     const blob = await file.async("blob");
                     activeBlob = URL.createObjectURL(blob);
-                    placeholder.innerHTML = `<img src="${activeBlob}" class="max-w-full max-h-full object-contain shadow-lg rounded-lg">`;
+                    placeholder.innerHTML = `<img src="${activeBlob}" class="max-w-full max-h-full object-contain shadow-2xl rounded-lg">`;
                     iframe.classList.add('hidden');
                     placeholder.classList.remove('hidden');
                 } else {
-                    // Fallback for unknown file types
                     placeholder.innerHTML = `
-                        <div class="p-8 bg-white rounded-2xl shadow-sm border border-slate-200 text-center max-w-sm mx-auto">
-                            <i data-lucide="file" class="w-10 h-10 text-slate-300 mx-auto mb-4"></i>
-                            <p class="text-sm font-bold mb-4">Binary File (.${ext})</p>
-                            <button onclick="downloadActiveResource()" class="inline-flex items-center gap-2 bg-slate-900 text-white px-6 py-2.5 rounded-xl font-bold text-xs shadow-md active:scale-95 transition-all">
-                                <i data-lucide="download" class="w-4 h-4"></i>
+                        <div class="p-12 bg-white rounded-3xl shadow-xl border border-slate-200 text-center max-w-sm mx-auto">
+                            <i data-lucide="file-box" class="w-12 h-12 text-slate-300 mx-auto mb-6"></i>
+                            <h3 class="text-lg font-bold text-slate-800 mb-2">Binary Content</h3>
+                            <p class="text-xs text-slate-400 mb-8 leading-relaxed">This file format (.${ext}) cannot be previewed directly. Please download it to view on your device.</p>
+                            <button onclick="downloadActiveResource()" class="w-full bg-slate-900 text-white py-3 rounded-2xl font-bold text-sm shadow-lg active:scale-95 transition-all">
                                 Download File
                             </button>
                         </div>`;
@@ -515,7 +536,7 @@
                 
                 if (window.innerWidth < 768) toggleMobileView();
             } catch (e) { 
-                placeholder.innerHTML = `<div class="text-center p-6"><i data-lucide="alert-circle" class="w-8 h-8 text-red-500 mx-auto mb-2"></i><p class="text-xs text-red-500 font-bold">Preview Error</p><p class="text-[10px] text-slate-400 mt-1">${e.message}</p></div>`;
+                placeholder.innerHTML = `<div class="text-center p-6"><i data-lucide="alert-circle" class="w-8 h-8 text-red-500 mx-auto mb-2"></i><p class="text-sm font-bold text-slate-800">Preview Unavailable</p><p class="text-[10px] text-slate-400 mt-1">${e.message}</p></div>`;
                 lucide.createIcons();
             }
         }
@@ -565,11 +586,16 @@
             files.forEach(path => {
                 const name = path.split('/').pop();
                 const item = document.createElement('div');
-                item.className = "flex items-center gap-2 p-3 rounded-xl bg-slate-50 hover:bg-blue-50 cursor-pointer transition-all border border-transparent hover:border-blue-100 group";
+                item.className = "flex items-start gap-3 p-3 rounded-2xl bg-slate-50 hover:bg-blue-50 cursor-pointer transition-all border border-transparent hover:border-blue-100 group";
                 item.innerHTML = `
-                    <i data-lucide="file" class="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500"></i>
-                    <span class="text-[10px] font-medium text-slate-600 truncate flex-1">${name}</span>
-                    <i data-lucide="download" class="w-3 h-3 text-slate-300 group-hover:text-blue-500"></i>
+                    <div class="p-2 bg-white rounded-lg shadow-sm group-hover:bg-blue-100 transition-colors">
+                        <i data-lucide="file" class="w-4 h-4 text-slate-400 group-hover:text-blue-600"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-[11px] font-bold text-slate-700 truncate">${name}</p>
+                        <p class="text-[9px] text-slate-400 uppercase tracking-tighter">Download Attachment</p>
+                    </div>
+                    <i data-lucide="download" class="w-4 h-4 text-slate-300 group-hover:text-blue-500 mt-2"></i>
                 `;
                 item.onclick = async () => {
                     const file = currentZip.file(path);
