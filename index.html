@@ -223,9 +223,13 @@
             const loader = document.getElementById('loading-overlay');
             loader.classList.remove('hidden');
             
+            // Clear cache for new course import
+            window._wlCache = null;
+            
             try {
                 currentZip = await JSZip.loadAsync(file);
-                
+                window._courseWebLinks = null; // reset web links cache for new file
+
                 // Flexible manifest search
                 let manifestFile = currentZip.file("imsmanifest.xml");
                 if (!manifestFile) {
@@ -252,10 +256,21 @@
 
                     resources[id] = {
                         type: res.getAttribute('type'),
+                        intendeduse: res.getAttribute('intendeduse'),
                         href: href,
                         files: files,
                         dependencies: dependencies
                     };
+                });
+
+                // Map outline item titles to resources
+                Array.from(doc.querySelectorAll('item')).forEach(item => {
+                    const ref = item.getAttribute('identifierref');
+                    const titleNode = item.querySelector('title');
+                    const titleText = titleNode ? titleNode.textContent.trim() : '';
+                    if (ref && titleText && resources[ref]) {
+                        resources[ref].title = titleText;
+                    }
                 });
 
                 // Extract course title robustly
@@ -470,7 +485,9 @@
                 
                 let chevron = '';
                 if (children.length > 0) {
-                    chevron = `<i data-lucide="chevron-right" class="w-3 h-3 text-slate-300 folder-toggle-icon transition-transform"></i>`;
+                    const isExpandedByDefault = depth === 0;
+                    const rotateStyle = isExpandedByDefault ? 'style="transform: rotate(90deg);"' : '';
+                    chevron = `<i data-lucide="chevron-right" class="w-3 h-3 text-slate-300 folder-toggle-icon transition-transform" ${rotateStyle}></i>`;
                 }
 
                 el.innerHTML = `${chevron}<i data-lucide="${icon}" class="w-4 h-4 shrink-0 ${iconColor}"></i>
@@ -480,8 +497,9 @@
 
                 let childrenContainer = null;
                 if (children.length > 0) {
+                    const isExpandedByDefault = depth === 0;
                     childrenContainer = document.createElement('div');
-                    childrenContainer.className = 'folder-children hidden';
+                    childrenContainer.className = `folder-children ${isExpandedByDefault ? '' : 'hidden'}`;
                     childrenContainer.setAttribute('data-parent-id', nodeId);
                     container.appendChild(childrenContainer);
                     buildTree(children, childrenContainer, depth + 1);
@@ -542,6 +560,99 @@
             document.getElementById('active-title').innerText = "No file selected";
         }
 
+        const SYNONYM_GROUPS = [
+            ['essay', 'prompt', 'assignment', 'creative', 'paper', 'topic', 'guidelines', 'writing', 'prompts'],
+            ['sqs', 'questions', 'guide', 'notes', 'quotes', 'interpretation', 'concepts', 'terms', 'supplement'],
+            ['video', 'youtube', 'film', 'clip', 'newsreel', 'audio', 'podcast']
+        ];
+
+        function getOverlapScore(words1, words2) {
+            let score = 0;
+            const matched2 = new Set();
+            
+            // 1. Exact matches
+            for (const w1 of words1) {
+                const idx = words2.indexOf(w1);
+                if (idx !== -1) {
+                    score += 2.0;
+                    matched2.add(idx);
+                }
+            }
+            
+            // 2. Synonym group matches
+            for (let i = 0; i < words1.length; i++) {
+                const w1 = words1[i];
+                if (words2.includes(w1)) continue;
+                
+                const group = SYNONYM_GROUPS.find(g => g.includes(w1));
+                if (group) {
+                    for (let j = 0; j < words2.length; j++) {
+                        if (matched2.has(j)) continue;
+                        const w2 = words2[j];
+                        if (group.includes(w2)) {
+                            score += 1.0;
+                            matched2.add(j);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            return score;
+        }
+
+        function matchesTitle(t1, t2) {
+            if (!t1 || !t2) return false;
+            t1 = t1.toLowerCase().trim();
+            t2 = t2.toLowerCase().trim();
+            
+            // Check direct substring
+            if (t1.includes(t2) || t2.includes(t1)) return true;
+            
+            // Extract all numbers (e.g. 1, 2, 18)
+            const num1 = t1.match(/\b\d+\b/g) || [];
+            const num2 = t2.match(/\b\d+\b/g) || [];
+            
+            // If one has numbers and the other does too, they MUST share at least one number
+            if (num1.length > 0 && num2.length > 0) {
+                const sharedNums = num1.filter(n => num2.includes(n));
+                if (sharedNums.length === 0) return false; // Number mismatch (e.g. Unit 1 vs Unit 2)!
+            }
+            
+            // Significant words (keeping numbers as significant!)
+            const clean1 = t1.replace(/[^\w\s]/g, '');
+            const clean2 = t2.replace(/[^\w\s]/g, '');
+            const words1 = clean1.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the' && w !== 'assignment' && w !== 'project');
+            const words2 = clean2.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the' && w !== 'assignment' && w !== 'project');
+            
+            const score = getOverlapScore(words1, words2);
+            return score >= 2.0;
+        }
+
+        function matchAgainstContext(contextText, itemTitle) {
+            if (!contextText || !itemTitle) return false;
+            contextText = contextText.toLowerCase();
+            itemTitle = itemTitle.toLowerCase();
+            
+            const cleanTitle = itemTitle.replace(/[^\w\s]/g, '');
+            const titleWords = cleanTitle.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the' && w !== 'assignment' && w !== 'project');
+            
+            if (titleWords.length === 0) return false;
+            
+            const numInTitle = itemTitle.match(/\b\d+\b/g) || [];
+            const numInContext = contextText.match(/\b\d+\b/g) || [];
+            if (numInTitle.length > 0) {
+                const shared = numInTitle.filter(n => numInContext.includes(n));
+                if (shared.length === 0) return false;
+            }
+            
+            const cleanContext = contextText.replace(/[^\w\s]/g, '');
+            const contextWords = cleanContext.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the');
+            
+            const score = getOverlapScore(titleWords, contextWords);
+            return score >= 2.0;
+        }
+
         function resolvePath(basePath, relativePath) {
             if (!relativePath) return null;
 
@@ -551,8 +662,13 @@
                 // Ignore malformed URIs
             }
 
+            // Strip IMSCC filebase token if present
+            relativePath = relativePath.replace(/\$IMS-CC-FILEBASE\$/g, '');
+
             // Absolute or data/hash links
-            if (relativePath.match(/^(http|https|data|blob|mailto|#|\/):/)) return relativePath;
+            if (relativePath.match(/^(http|https|data|blob|mailto|#):/)) return relativePath;
+            if (relativePath.startsWith('//')) return 'https:' + relativePath;
+            if (relativePath.startsWith('/')) return relativePath.substring(1);
             
             // 1. Try standard relative resolution
             const baseDir = basePath.substring(0, basePath.lastIndexOf('/'));
@@ -586,6 +702,70 @@
             return standardPath; // fallback to standard if nothing else works
         }
 
+        // Decode LMS redirect URLs (e.g. Schoology's ?path=ENCODED_URL, Canvas ?url=..., etc.)
+        // For Schoology-path attachments in assignments: match against THIS assignment's deps only.
+        // depLinks = [{url, name, ref}], positionalIndex = order among sgy attachments (-1 = skip positional)
+        function pickDepLink(linkText, positionalIndex, depLinks) {
+            if (!depLinks || depLinks.length === 0) return null;
+            if (depLinks.length === 1) return depLinks[0]; // Only one dep — must be it
+            if (linkText) {
+                const norm = linkText.toLowerCase().trim();
+                const exact = depLinks.find(d => d.name && d.name.toLowerCase().trim() === norm);
+                if (exact) return exact;
+                const partial = depLinks.find(d => d.name && (
+                    d.name.toLowerCase().includes(norm) || norm.includes(d.name.toLowerCase())
+                ));
+                if (partial) return partial;
+            }
+            if (positionalIndex >= 0 && positionalIndex < depLinks.length) return depLinks[positionalIndex];
+            return null;
+        }
+
+        function extractRealUrl(url) {
+            if (!url) return url;
+            try {
+                const parsed = new URL(url);
+                for (const param of ['path', 'url', 'redirect', 'to', 'href']) {
+                    const val = parsed.searchParams.get(param);
+                    if (val) {
+                        try {
+                            const decoded = decodeURIComponent(val);
+                            if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+                                return decoded;
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+            return url;
+        }
+
+        // Build (and cache) the full list of course web links from all imswl resources.
+        // Called lazily when an assignment with a Schoology-path attachment is first viewed.
+        async function getCourseWebLinks() {
+            if (window._courseWebLinks) return window._courseWebLinks;
+            const links = [];
+            for (const [id, r] of Object.entries(resources)) {
+                if (!r.type || !r.type.includes('imswl') || !r.href) continue;
+                try {
+                    const content = await currentZip.file(r.href).async("string");
+                    const xml = new DOMParser().parseFromString(content, "text/xml");
+                    let url = xml.querySelector('url')?.getAttribute('href') ||
+                              xml.querySelector('check_link_url')?.getAttribute('href') ||
+                              xml.querySelector('iframe_url')?.getAttribute('href') ||
+                              xml.querySelector('url')?.textContent?.trim();
+                    if (!url) { const m = content.match(/https?:\/\/[^"'\s<]+/); if (m) url = m[0]; }
+                    if (url) {
+                        url = extractRealUrl(url);
+                        links.push({ title: r.title || id, url, id });
+                    }
+                } catch (e) {}
+            }
+            links.sort((a, b) => a.title.localeCompare(b.title));
+            window._courseWebLinks = links;
+            return links;
+        }
+
         function openInNewWindow() {
             if (activeBlob) {
                 window.open(activeBlob, '_blank');
@@ -608,6 +788,247 @@
             a.click();
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 100);
+        }
+
+        async function getAttachmentDetails(resolvedPath, fallbackName, contextText) {
+            if (!resolvedPath) return null;
+            
+            // Check if it's already a web link
+            if (resolvedPath.startsWith('http://') || resolvedPath.startsWith('https://')) {
+                return { type: 'link', url: resolvedPath, name: fallbackName || 'Web Link' };
+            }
+
+            let cleanPath = resolvedPath.replace(/^\//, '');
+            if (!currentZip) {
+                return { type: 'file', path: resolvedPath, name: fallbackName || resolvedPath.split('/').pop() };
+            }
+
+            let assetFile = currentZip.file(resolvedPath) || 
+                            currentZip.file('/' + resolvedPath) || 
+                            currentZip.file(cleanPath) || 
+                            currentZip.file('/' + cleanPath);
+                            
+            if (!assetFile) {
+                // Try searching zip for matching filename if it contains server paths
+                if (resolvedPath.includes('sgy-core-full') || resolvedPath.includes('sgy_pkg')) {
+                    const filename = resolvedPath.split('/').pop();
+                    const allFiles = Object.keys(currentZip.files);
+                    const found = allFiles.find(f => f.split('/').pop() === filename);
+                    if (found) {
+                        assetFile = currentZip.file(found);
+                    }
+                }
+            }
+
+            if (!assetFile) {
+                // If it's a Schoology server path or contains sgy_pkg or var/www/html, treat it as an external link/resource
+                if (resolvedPath.includes('sgy-core-full') || resolvedPath.includes('sgy_pkg') || resolvedPath.includes('var/www/html')) {
+                    let url = resolvedPath;
+                    let matchedFromCache = false;
+
+                    // Reconstruct/Extract from webLink XML inside package dynamically
+                    if (currentZip && resources) {
+                        const wlResources = Object.values(resources).filter(r => 
+                            r.type && r.type.includes('imswl') && r.title && r.href
+                        );
+
+                        let bestResource = null;
+                        let bestScore = 0;
+
+                        for (const r of wlResources) {
+                            let matches = false;
+                            let score = 0;
+
+                            if (fallbackName) {
+                                if (matchesTitle(fallbackName, r.title)) {
+                                    matches = true;
+                                    const clean1 = fallbackName.toLowerCase().replace(/[^\w\s]/g, '');
+                                    const clean2 = r.title.toLowerCase().replace(/[^\w\s]/g, '');
+                                    const words1 = clean1.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the' && w !== 'assignment' && w !== 'project');
+                                    const words2 = clean2.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the' && w !== 'assignment' && w !== 'project');
+                                    const intersection = words1.filter(w => words2.includes(w));
+                                    score = intersection.length;
+                                    if (fallbackName.toLowerCase().includes(r.title.toLowerCase()) || r.title.toLowerCase().includes(fallbackName.toLowerCase())) {
+                                        score += 10;
+                                    }
+                                }
+                            }
+
+                            if (!matches && contextText) {
+                                if (matchAgainstContext(contextText, r.title)) {
+                                    matches = true;
+                                    const cleanTitle = r.title.toLowerCase().replace(/[^\w\s]/g, '');
+                                    const titleWords = cleanTitle.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the' && w !== 'assignment' && w !== 'project');
+                                    const cleanContext = contextText.replace(/[^\w\s]/g, '');
+                                    const contextWords = cleanContext.split(/\s+/).filter(w => (w.length >= 3 || /^\d+$/.test(w)) && w !== 'and' && w !== 'the');
+                                    score = getOverlapScore(titleWords, contextWords);
+                                }
+                            }
+
+                            if (matches && score > bestScore) {
+                                bestScore = score;
+                                bestResource = r;
+                            }
+                        }
+
+                        if (bestResource) {
+                            const file = currentZip.file(bestResource.href);
+                            if (file) {
+                                try {
+                                    const content = await file.async("string");
+                                    const xmlDoc = new DOMParser().parseFromString(content, "text/xml");
+                                    let fileUrl = xmlDoc.querySelector('url')?.getAttribute('href') ||
+                                                  xmlDoc.querySelector('check_link_url')?.getAttribute('href') ||
+                                                  xmlDoc.querySelector('iframe_url')?.getAttribute('href') ||
+                                                  xmlDoc.querySelector('url')?.textContent;
+                                    if (fileUrl) {
+                                        url = extractRealUrl(fileUrl);
+                                        matchedFromCache = true;
+                                        if (!fallbackName || fallbackName === 'Web Link') {
+                                            fallbackName = bestResource.title;
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.error("Error reading matched webLink:", e);
+                                }
+                            }
+                        }
+                    }
+
+                    // Check if the assignment description (contextText) contains a direct URL
+                    if (!matchedFromCache && contextText) {
+                        const urlRegex = /(https?:\/\/[^\s<>'"]+)/gi;
+                        const urlsFound = contextText.match(urlRegex);
+                        if (urlsFound && urlsFound.length > 0) {
+                            let cleanUrl = urlsFound[0].replace(/[.,;:!?]+$/, '');
+                            const betterUrl = urlsFound.find(u => {
+                                const l = u.toLowerCase();
+                                return l.includes('docs.google') || l.includes('drive.google') || l.includes('youtube.com') || l.includes('youtu.be') || l.includes('forms.gle');
+                            });
+                            if (betterUrl) {
+                                cleanUrl = betterUrl.replace(/[.,;:!?]+$/, '');
+                            }
+                            url = cleanUrl;
+                            matchedFromCache = true;
+                        }
+                    }
+
+                    if (!matchedFromCache) return null;
+
+                    return { type: 'link', url: url, name: fallbackName || 'Web Link' };
+                }
+
+                if (resolvedPath.match(/[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/)) {
+                    const url = resolvedPath.startsWith('http') ? resolvedPath : `https://${resolvedPath}`;
+                    return { type: 'link', url: url, name: fallbackName || resolvedPath.split('/').pop() };
+                }
+                return { type: 'file', path: resolvedPath, name: fallbackName || resolvedPath.split('/').pop() };
+            }
+
+            // Check if it's a standard media file or a wrapper
+            const ext = assetFile.name.split('.').pop().toLowerCase();
+            const mediaExtensions = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'pdf', 'mp3', 'mp4', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'zip'];
+            if (mediaExtensions.includes(ext)) {
+                return { type: 'file', path: assetFile.name, name: fallbackName || assetFile.name.split('/').pop() };
+            }
+
+            // Check for link wrappers
+            try {
+                const content = await assetFile.async("string");
+                
+                // XML Link
+                if (content.includes('<?xml') || content.includes('<webLink') || content.includes('<webcontent')) {
+                    const xmlDoc = new DOMParser().parseFromString(content, "text/xml");
+                    let url = xmlDoc.querySelector('url')?.getAttribute('href') ||
+                              xmlDoc.querySelector('check_link_url')?.getAttribute('href') ||
+                              xmlDoc.querySelector('iframe_url')?.getAttribute('href') ||
+                              xmlDoc.querySelector('url')?.textContent;
+                    if (!url) {
+                        const match = content.match(/https?:\/\/[^"'\s<]+/);
+                        if (match) url = match[0];
+                    }
+                    if (url) {
+                        url = extractRealUrl(url);
+                        let title = xmlDoc.querySelector('title')?.textContent || xmlDoc.querySelector('name')?.textContent || fallbackName || assetFile.name.split('/').pop();
+                        return { type: 'link', url: url, name: title };
+                    }
+                }
+
+                // HTML Redirect
+                if (content.includes('<html') || content.includes('<script') || content.includes('http-equiv="refresh"')) {
+                    const htmlDoc = new DOMParser().parseFromString(content, "text/html");
+                    let url = null;
+                    const metaRefresh = htmlDoc.querySelector('meta[http-equiv="refresh"]');
+                    if (metaRefresh) {
+                        const contentAttr = metaRefresh.getAttribute('content') || '';
+                        const urlMatch = contentAttr.match(/url=([^;]+)/i);
+                        if (urlMatch) url = urlMatch[1];
+                    }
+                    if (!url) {
+                        const match = content.match(/window\.location(?:\.href)?\s*=\s*['"](.*?)['"]/);
+                        if (match) url = match[1];
+                    }
+                    if (url) {
+                        let title = htmlDoc.title || fallbackName || assetFile.name.split('/').pop();
+                        return { type: 'link', url: url, name: title };
+                    }
+                }
+
+                // JSON Link
+                try {
+                    const json = JSON.parse(content);
+                    if (json.url) {
+                        return { type: 'link', url: json.url, name: json.title || json.name || fallbackName || assetFile.name.split('/').pop() };
+                    }
+                } catch (e) {}
+
+                // Text URL
+                const urlMatch = content.match(/https?:\/\/[^"'\s<]+/);
+                if (urlMatch) {
+                    return { type: 'link', url: urlMatch[0], name: fallbackName || assetFile.name.split('/').pop() };
+                }
+            } catch (e) {
+                console.error("Error reading file to check for links:", e);
+            }
+
+            return { type: 'file', path: assetFile.name, name: fallbackName || assetFile.name.split('/').pop() };
+        }
+
+        async function downloadAttachmentFile(path, name) {
+            if (!currentZip) return;
+            const cleanPath = path.replace(/^\//, '');
+            const file = currentZip.file(path) || currentZip.file(cleanPath);
+            if (file) {
+                const blob = await file.async("blob");
+                const ext = path.split('.').pop().toLowerCase();
+                
+                // Preview PDF/Images in new tab
+                if (['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+                    let mimeType = blob.type;
+                    if (ext === 'pdf') mimeType = 'application/pdf';
+                    else if (ext === 'png') mimeType = 'image/png';
+                    else if (['jpg', 'jpeg'].includes(ext)) mimeType = 'image/jpeg';
+                    else if (ext === 'gif') mimeType = 'image/gif';
+                    else if (ext === 'webp') mimeType = 'image/webp';
+                    else if (ext === 'svg') mimeType = 'image/svg+xml';
+                    
+                    const viewBlob = new Blob([blob], { type: mimeType });
+                    const url = URL.createObjectURL(viewBlob);
+                    window.open(url, '_blank');
+                    return;
+                }
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 100);
+            } else {
+                alert("Attachment file not found in package.");
+            }
         }
 
         async function loadResource(element, ref, title) {
@@ -640,24 +1061,33 @@
                 for (const depRef of res.dependencies) {
                     const depRes = resources[depRef];
                     if (depRes) {
-                        if (depRes.type === 'imswl_xmlv1p1' || depRes.type === 'imswl_xmlv1p2' || depRes.type === 'imswl_xmlv1p3' || (depRes.type && depRes.type.includes('imswl'))) {
-                            try {
-                                let url = null;
-                                const fileContent = await currentZip.file(depRes.href).async("string");
-                                const xmlDoc = new DOMParser().parseFromString(fileContent, "text/xml");
-                                url = xmlDoc.querySelector('url')?.getAttribute('href') ||
-                                      xmlDoc.querySelector('check_link_url')?.getAttribute('href') ||
-                                      xmlDoc.querySelector('iframe_url')?.getAttribute('href');
-                                if (!url && fileContent.includes('http')) {
-                                     const match = fileContent.match(/https?:\/\/[^"'\s<]+/);
-                                     if (match) url = match[0];
+                        if (depRes.type && depRes.type.includes('imswl')) {
+                            const depHref = depRes.href || (depRes.files && depRes.files[0]);
+                            if (depHref) {
+                                const depZf = currentZip.file(depHref);
+                                if (depZf) {
+                                    try {
+                                        let url = null;
+                                        const fileContent = await depZf.async("string");
+                                        const xmlDoc = new DOMParser().parseFromString(fileContent, "text/xml");
+                                        url = xmlDoc.querySelector('url')?.getAttribute('href') ||
+                                              xmlDoc.querySelector('check_link_url')?.getAttribute('href') ||
+                                              xmlDoc.querySelector('iframe_url')?.getAttribute('href') ||
+                                              xmlDoc.querySelector('url')?.textContent?.trim();
+                                        if (!url && fileContent.includes('http')) {
+                                            const match = fileContent.match(/https?:\/\/[^"'\s<]+/);
+                                            if (match) url = match[0];
+                                        }
+                                        if (url) {
+                                            url = extractRealUrl(url);
+                                            const linkTitle = xmlDoc.querySelector('title')?.textContent?.trim() ||
+                                                              xmlDoc.querySelector('name')?.textContent?.trim() || url;
+                                            allAttachments.push({ type: 'link', url, name: linkTitle, _depRef: depRef });
+                                        }
+                                    } catch (e) {
+                                        console.error("Error parsing dependency link:", depRef, e);
+                                    }
                                 }
-                                if (url) {
-                                    let linkTitle = xmlDoc.querySelector('title')?.textContent || url;
-                                    allAttachments.push({ type: 'link', url: url, name: linkTitle });
-                                }
-                            } catch (e) {
-                                console.error("Error parsing dependency link:", e);
                             }
                         } else if (depRes.type === 'webcontent' || (depRes.files && depRes.files.length > 0)) {
                             // File dependency
@@ -718,6 +1148,7 @@
                     }
 
                     if (url) {
+                        url = extractRealUrl(url);
                         currentSelection.href = url;
                         currentSelection.type = 'link';
                         placeholder.innerHTML = `
@@ -781,69 +1212,125 @@
                 lucide.createIcons();
             }
             // Handler: Assignments
-            else if (res.type && res.type.toLowerCase().includes('assignment')) {
-                let xmlText = await file.async("string");
-                const xmlDoc = new DOMParser().parseFromString(xmlText, 'text/xml');
-
-                let assignmentTitle = xmlDoc.querySelector('title')?.textContent;
-                let textNode = xmlDoc.querySelector('text');
-                let htmlContent = textNode ? (textNode.textContent || textNode.innerHTML) : "";
-                // Sometimes CDATA tags are left in textContent by DOMParser for XML depending on implementation
-                htmlContent = htmlContent.replace(/<!\[CDATA\[/g, '').replace(/]]>/g, '');
-
-                const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
-
-                if (!doc.head.querySelector('meta[charset]')) {
-                    const meta = document.createElement('meta');
-                    meta.setAttribute('charset', 'UTF-8');
-                    doc.head.insertBefore(meta, doc.head.firstChild);
-                }
-
-                // Extract attachments defined in XML
-                const xmlAttachments = xmlDoc.querySelectorAll('attachment');
-                xmlAttachments.forEach(att => {
-                    const href = att.getAttribute('href');
-                    if (href) {
-                        const resolvedPath = resolvePath(res.href, href);
-                        if (resolvedPath && currentZip.file(resolvedPath)) {
-                            allAttachments.push({ type: 'file', path: resolvedPath, name: resolvedPath.split('/').pop() });
-                        }
-                    }
-                });
-
-                const selectors = 'img[src], video[src], audio[src], source[src], link[rel="stylesheet"], script[src], a[href]';
-                const nodes = Array.from(doc.querySelectorAll(selectors));
-
+            else if ((res.type && res.type.toLowerCase().includes('assignment')) || res.intendeduse === 'assignment') {
+                let fileContent = await file.async("string");
+                let docTitle = title;
+                let displayHtml = "";
+                let maxPoints = null;
+                let hasSgyAttachments = false;
                 const embeddedPaths = new Set();
 
-                for (const node of nodes) {
-                    const attr = node.tagName === 'LINK' || node.tagName === 'A' ? 'href' : 'src';
-                    const val = node.getAttribute(attr);
+                // Check if it's HTML or XML
+                const ext = res.href.split('.').pop().toLowerCase();
+                const isHtml = ['html', 'htm'].includes(ext);
 
-                    if (val && !val.startsWith('http') && !val.startsWith('#') && !val.startsWith('mailto:')) {
-                        const solvedPath = resolvePath(res.href, val);
-                        const assetFile = currentZip.file(solvedPath);
+                // Pre-resolve EVERY imswl dependency for this specific assignment.
+                // These are the authoritative URLs. We never use global fuzzy search for Schoology
+                // server-path links — that causes wrong URLs from other assignments to bleed in.
+                const depLinks = [];
+                for (const depRef of (res.dependencies || [])) {
+                    const depRes = resources[depRef];
+                    if (!depRes || !depRes.type || !depRes.type.includes('imswl')) continue;
+                    const depHref = depRes.href || (depRes.files && depRes.files[0]);
+                    if (!depHref) continue;
+                    const zf = currentZip.file(depHref);
+                    if (!zf) continue;
+                    try {
+                        const content = await zf.async("string");
+                        const xml = new DOMParser().parseFromString(content, "text/xml");
+                        let url = xml.querySelector('url')?.getAttribute('href') ||
+                                  xml.querySelector('check_link_url')?.getAttribute('href') ||
+                                  xml.querySelector('iframe_url')?.getAttribute('href') ||
+                                  xml.querySelector('url')?.textContent?.trim();
+                        if (!url) { const m = content.match(/https?:\/\/[^"'\s<]+/); if (m) url = m[0]; }
+                        if (url) {
+                            url = extractRealUrl(url);
+                            const name = xml.querySelector('title')?.textContent?.trim() ||
+                                         xml.querySelector('name')?.textContent?.trim() || '';
+                            depLinks.push({ url, name, ref: depRef });
+                        }
+                    } catch (e) { console.error('dep resolve error', depRef, e); }
+                }
 
-                        if (assetFile) {
-                            if (node.tagName !== 'A' && node.tagName !== 'LINK') {
-                                embeddedPaths.add(solvedPath);
-                            }
+                if (isHtml) {
+                    const doc = new DOMParser().parseFromString(fileContent, 'text/html');
+                    
+                    // Parse points
+                    const pointsInput = doc.querySelector('input[name="sch-grade-item-max-points"]');
+                    if (pointsInput) {
+                        maxPoints = pointsInput.value;
+                        pointsInput.remove();
+                    }
 
-                            if (node.tagName === 'A') {
-                                // Expose linked internal files to attachments footer
-                                allAttachments.push({ type: 'file', path: solvedPath, name: solvedPath.split('/').pop() });
+                    // Parse title
+                    docTitle = title || doc.title || "Assignment";
 
-                                const assetBlob = await assetFile.async("blob");
-                                const url = URL.createObjectURL(assetBlob);
-                                assetBlobs.push(url);
-                                node.setAttribute(attr, url);
-                                node.setAttribute("download", assetFile.name.split('/').pop());
-                                node.removeAttribute("onclick");
-                                node.style.textDecoration = "underline";
-                                node.style.color = "blue";
+                    // Parse HTML attachments
+                    const attachmentContainers = doc.querySelectorAll('.sch-grade-item-attachments');
+                    const attachmentElements = doc.querySelectorAll('.sch-grade-item-attachments-item, .sch-grade-item-attachments a');
+
+                    // Pre-scan body for a directly pasted Google/YouTube URL (some posts embed it as text)
+                    const _bodyText = doc.body ? doc.body.textContent : "";
+                    const _bodyUrls = _bodyText.match(/https?:\/\/[^\s<>'"]+/gi) || [];
+                    const _directBodyUrl = _bodyUrls.find(u => {
+                        const l = u.toLowerCase();
+                        return l.includes('docs.google.com') || l.includes('drive.google.com') ||
+                               l.includes('youtube.com') || l.includes('youtu.be') || l.includes('forms.gle');
+                    });
+
+                    let sgyIdx = 0;
+                    for (const node of attachmentElements) {
+                        const val = node.getAttribute('href');
+                        if (!val) continue;
+                        let linkText = node.textContent.trim().replace(/\s+/g, ' ');
+                        const isSgyLink = val.includes('sgy-core-full') || val.includes('sgy_pkg') || val.includes('var/www/html');
+                        if (!linkText && isSgyLink) linkText = docTitle;
+
+                        if (isSgyLink) {
+                            if (depLinks.length > 0) {
+                                // Manifest declared explicit deps — use them precisely
+                                const match = pickDepLink(linkText, sgyIdx, depLinks);
+                                if (match && !allAttachments.some(a => a.url === match.url)) {
+                                    allAttachments.push({ type: 'link', url: match.url, name: match.name || linkText });
+                                }
                             } else {
+                                // Schoology export omits the assignment→weblink mapping.
+                                // If a Google/Drive/YouTube URL was pasted directly in the body, use it.
+                                // Otherwise surface the course web links search widget.
+                                if (_directBodyUrl && !allAttachments.some(a => a.url === extractRealUrl(_directBodyUrl))) {
+                                    const cleanUrl = extractRealUrl(_directBodyUrl.replace(/[.,;:!?]+$/, ''));
+                                    allAttachments.push({ type: 'link', url: cleanUrl, name: linkText || docTitle });
+                                } else {
+                                    hasSgyAttachments = true;
+                                }
+                            }
+                            sgyIdx++;
+                            continue;
+                        }
+                        const solvedPath = resolvePath(res.href, val);
+                        if (solvedPath) {
+                            const contextText = doc.body ? doc.body.textContent : "";
+                            const details = await getAttachmentDetails(solvedPath, linkText, contextText);
+                            if (details) allAttachments.push(details);
+                        }
+                    }
+
+                    // Remove attachment containers from HTML body
+                    attachmentContainers.forEach(el => el.remove());
+
+                    // Relink embedded media assets
+                    const selectors = 'img[src], video[src], audio[src], source[src], link[rel="stylesheet"], script[src]';
+                    const mediaNodes = Array.from(doc.querySelectorAll(selectors));
+                    for (const node of mediaNodes) {
+                        const attr = node.tagName === 'LINK' ? 'href' : 'src';
+                        const val = node.getAttribute(attr);
+                        if (val && !val.startsWith('http') && !val.startsWith('#') && !val.startsWith('mailto:')) {
+                            const solvedPath = resolvePath(res.href, val);
+                            const assetFile = currentZip.file(solvedPath) || currentZip.file(solvedPath.replace(/^\//, ''));
+                            if (assetFile) {
+                                embeddedPaths.add(solvedPath);
                                 const assetBlob = await assetFile.async("blob");
-                                let mime = assetFile.name.endsWith('css') ? 'text/css' :
+                                let mime = assetFile.name.endsWith('css') ? 'text/css' : 
                                           assetFile.name.endsWith('js') ? 'application/javascript' : assetBlob.type;
                                 const url = URL.createObjectURL(new Blob([assetBlob], { type: mime }));
                                 assetBlobs.push(url);
@@ -851,52 +1338,306 @@
                             }
                         }
                     }
+
+                    // Relink inline body links — Schoology paths use dep list; others use file resolution
+                    const bodyLinks = Array.from(doc.querySelectorAll('a[href]'));
+                    for (const node of bodyLinks) {
+                        const val = node.getAttribute('href');
+                        if (!val || val.startsWith('http') || val.startsWith('#') || val.startsWith('mailto:')) continue;
+                        const isSgyBodyLink = val.includes('sgy-core-full') || val.includes('sgy_pkg') || val.includes('var/www/html');
+                        if (isSgyBodyLink) {
+                            if (depLinks.length > 0) {
+                                const linkText = node.textContent.trim().replace(/\s+/g, ' ') || docTitle;
+                                const match = pickDepLink(linkText, -1, depLinks);
+                                if (match) { node.setAttribute('href', match.url); node.setAttribute('target', '_blank'); }
+                            }
+                            // else: leave Schoology placeholder href in place; rendered body
+                            // won't show a broken link since the element won't be a visible link
+                        } else {
+                            const solvedPath = resolvePath(res.href, val);
+                            if (solvedPath) {
+                                const linkText = node.textContent.trim().replace(/\s+/g, ' ') || docTitle;
+                                const contextText = doc.body ? doc.body.textContent : "";
+                                const details = await getAttachmentDetails(solvedPath, linkText, contextText);
+                                if (details && details.type === 'link') { node.setAttribute('href', details.url); node.setAttribute('target', '_blank'); }
+                            }
+                        }
+                    }
+
+                    displayHtml = doc.body ? doc.body.innerHTML : doc.documentElement.innerHTML;
+                } else {
+                    // XML Assignment file
+                    const xmlDoc = new DOMParser().parseFromString(fileContent, 'text/xml');
+                    let assignmentTitle = xmlDoc.querySelector('title')?.textContent;
+                    docTitle = assignmentTitle || title || "Assignment";
+
+                    let textNode = xmlDoc.querySelector('text');
+                    let htmlContent = textNode ? (textNode.textContent || textNode.innerHTML) : "";
+                    htmlContent = htmlContent.replace(/<!\[CDATA\[/g, '').replace(/]]>/g, '');
+
+                    const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
+
+                    // Parse points
+                    const pointsInput = doc.querySelector('input[name="sch-grade-item-max-points"]');
+                    if (pointsInput) {
+                        maxPoints = pointsInput.value;
+                        pointsInput.remove();
+                    }
+
+                    // Extract XML attachments
+                    const xmlAttachments = xmlDoc.querySelectorAll('attachment');
+                    let sgyIdxXml = 0;
+
+                    for (const att of xmlAttachments) {
+                        const href = att.getAttribute('href');
+                        if (!href) continue;
+                        const isSgyLink = href.includes('sgy-core-full') || href.includes('sgy_pkg') || href.includes('var/www/html');
+                        const attName = att.getAttribute('name') || att.getAttribute('title') || att.textContent.trim() || '';
+
+                        if (isSgyLink) {
+                            if (depLinks.length > 0) {
+                                const match = pickDepLink(attName, sgyIdxXml, depLinks);
+                                if (match && !allAttachments.some(a => a.url === match.url)) {
+                                    allAttachments.push({ type: 'link', url: match.url, name: match.name || attName || docTitle });
+                                }
+                            } else {
+                                hasSgyAttachments = true;
+                            }
+                            sgyIdxXml++;
+                            continue;
+                        }
+                        const resolvedPath = resolvePath(res.href, href);
+                        if (resolvedPath) {
+                            const fallback = attName || resolvedPath.split('/').pop();
+                            const contextText = doc.body ? doc.body.textContent : "";
+                            const details = await getAttachmentDetails(resolvedPath, fallback, contextText);
+                            if (details) allAttachments.push(details);
+                        }
+                    }
+
+                    // Relink embedded media assets
+                    const selectors = 'img[src], video[src], audio[src], source[src], link[rel="stylesheet"], script[src]';
+                    const mediaNodes = Array.from(doc.querySelectorAll(selectors));
+                    for (const node of mediaNodes) {
+                        const attr = node.tagName === 'LINK' ? 'href' : 'src';
+                        const val = node.getAttribute(attr);
+                        if (val && !val.startsWith('http') && !val.startsWith('#') && !val.startsWith('mailto:')) {
+                            const solvedPath = resolvePath(res.href, val);
+                            const assetFile = currentZip.file(solvedPath) || currentZip.file(solvedPath.replace(/^\//, ''));
+                            if (assetFile) {
+                                embeddedPaths.add(solvedPath);
+                                const assetBlob = await assetFile.async("blob");
+                                let mime = assetFile.name.endsWith('css') ? 'text/css' : 
+                                          assetFile.name.endsWith('js') ? 'application/javascript' : assetBlob.type;
+                                const url = URL.createObjectURL(new Blob([assetBlob], { type: mime }));
+                                assetBlobs.push(url);
+                                node.setAttribute(attr, url);
+                            }
+                        }
+                    }
+
+                    // Relink inline body links — Schoology paths use dep list; others use file resolution
+                    const bodyLinksXml = Array.from(doc.querySelectorAll('a[href]'));
+                    for (const node of bodyLinksXml) {
+                        const val = node.getAttribute('href');
+                        if (!val || val.startsWith('http') || val.startsWith('#') || val.startsWith('mailto:')) continue;
+                        const isSgyBodyLink = val.includes('sgy-core-full') || val.includes('sgy_pkg') || val.includes('var/www/html');
+                        if (isSgyBodyLink) {
+                            if (depLinks.length > 0) {
+                                const linkText = node.textContent.trim().replace(/\s+/g, ' ') || docTitle;
+                                const match = pickDepLink(linkText, -1, depLinks);
+                                if (match) { node.setAttribute('href', match.url); node.setAttribute('target', '_blank'); }
+                            }
+                        } else {
+                            const solvedPath = resolvePath(res.href, val);
+                            if (solvedPath) {
+                                const linkText = node.textContent.trim().replace(/\s+/g, ' ') || docTitle;
+                                const contextText = doc.body ? doc.body.textContent : "";
+                                const details = await getAttachmentDetails(solvedPath, linkText, contextText);
+                                if (details && details.type === 'link') { node.setAttribute('href', details.url); node.setAttribute('target', '_blank'); }
+                            }
+                        }
+                    }
+
+                    displayHtml = doc.body ? doc.body.innerHTML : doc.documentElement.innerHTML;
                 }
 
-                let docTitle = assignmentTitle || title || doc.title || "Assignment";
-                let displayHtml = doc.body ? doc.body.innerHTML : doc.documentElement.innerHTML;
+                // Deduplicate and filter out embedded media
+                const seen = new Set();
+                const uniqueAttachments = [];
+                allAttachments.forEach(a => {
+                    const id = a.type === 'file' ? a.path : a.url;
+                    if (id && !seen.has(id)) {
+                        seen.add(id);
+                        uniqueAttachments.push(a);
+                    }
+                });
 
+                const standaloneAttachments = uniqueAttachments.filter(a => a.type !== 'file' || !embeddedPaths.has(a.path));
+
+                // Fetch all course web links if this assignment has Schoology-path attachment placeholders
+                const courseWebLinks = hasSgyAttachments ? await getCourseWebLinks() : [];
+
+                // Beautiful, styled Assignment view card
                 let htmlOutput = `
                     <div class="p-8 bg-white rounded-2xl shadow-sm border border-slate-200 text-left max-w-3xl mx-auto w-full my-8">
                         <div class="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
-                            <div class="p-2 bg-purple-50 text-purple-500 rounded-lg">
+                            <div class="p-2.5 bg-purple-50 text-purple-500 rounded-lg shadow-sm shrink-0">
                                 <i data-lucide="clipboard-list" class="w-6 h-6"></i>
                             </div>
-                            <h2 class="text-lg font-bold text-slate-800">${docTitle}</h2>
+                            <div class="min-w-0 flex-1">
+                                <div class="flex flex-wrap items-center gap-2 mb-1">
+                                    <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-purple-100 text-purple-700">Assignment</span>
+                                    ${maxPoints ? `
+                                    <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-700">
+                                        Points: ${maxPoints}
+                                    </span>
+                                    ` : ''}
+                                </div>
+                                <h2 class="text-lg sm:text-xl font-bold text-slate-800 truncate">${docTitle}</h2>
+                            </div>
                         </div>
-                        <div class="prose prose-sm prose-slate max-w-none">
+                        <div class="prose prose-sm prose-slate max-w-none text-slate-600 leading-relaxed mb-6">
                             ${displayHtml}
                         </div>
+                        
+                        ${standaloneAttachments.length > 0 ? `
+                        <div class="mt-6 pt-6 border-t border-slate-100">
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
+                                <i data-lucide="paperclip" class="w-3.5 h-3.5"></i>
+                                Attachments & Resources
+                            </h3>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                ${standaloneAttachments.map(att => {
+                                    const isLink = att.type === 'link';
+                                    const name = att.name || 'Resource';
+                                    let icon = 'file';
+                                    let colorClass = 'text-slate-600 bg-slate-50 border-slate-200 hover:bg-slate-100';
+                                    let iconColor = 'text-slate-500';
+                                    
+                                    if (isLink) {
+                                        const lowerUrl = att.url.toLowerCase();
+                                        const lowerName = name.toLowerCase();
+                                        if (lowerUrl.includes('docs.google.com/presentation') || lowerName.includes('slide') || lowerName.includes('presentation') || lowerName.includes('inspo')) {
+                                            icon = 'presentation';
+                                            colorClass = 'text-amber-700 bg-amber-50/50 border-amber-100 hover:bg-amber-50 hover:border-amber-200';
+                                            iconColor = 'text-amber-500';
+                                        } else if (lowerUrl.includes('docs.google.com/document') || lowerName.includes('doc') || lowerName.includes('report')) {
+                                            icon = 'file-text';
+                                            colorClass = 'text-blue-700 bg-blue-50/50 border-blue-100 hover:bg-blue-50 hover:border-blue-200';
+                                            iconColor = 'text-blue-500';
+                                        } else if (lowerUrl.includes('docs.google.com/forms') || lowerName.includes('form') || lowerName.includes('survey') || lowerName.includes('feedback')) {
+                                            icon = 'check-square';
+                                            colorClass = 'text-purple-700 bg-purple-50/50 border-purple-100 hover:bg-purple-50 hover:border-purple-200';
+                                            iconColor = 'text-purple-500';
+                                        } else if (lowerUrl.includes('youtube.com') || lowerUrl.includes('youtu.be') || lowerName.includes('video') || lowerName.includes('youtube') || lowerName.includes('movie')) {
+                                            icon = 'video';
+                                            colorClass = 'text-red-700 bg-red-50/50 border-red-100 hover:bg-red-50 hover:border-red-200';
+                                            iconColor = 'text-red-500';
+                                        } else {
+                                            icon = 'link';
+                                            colorClass = 'text-indigo-700 bg-indigo-50/50 border-indigo-100 hover:bg-indigo-50 hover:border-indigo-200';
+                                            iconColor = 'text-indigo-500';
+                                        }
+                                    } else {
+                                        const ext = att.name.split('.').pop().toLowerCase();
+                                        if (ext === 'pdf') {
+                                            icon = 'file-text';
+                                            colorClass = 'text-red-700 bg-red-50/50 border-red-100 hover:bg-red-50 hover:border-red-200';
+                                            iconColor = 'text-red-500';
+                                        } else if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
+                                            icon = 'image';
+                                            colorClass = 'text-emerald-700 bg-emerald-50/50 border-emerald-100 hover:bg-emerald-50 hover:border-emerald-200';
+                                            iconColor = 'text-emerald-500';
+                                        }
+                                    }
+
+                                    const safeUrl = isLink ? att.url.replace(/'/g, "\\'") : '';
+                                    const safePath = !isLink && att.path ? att.path.replace(/'/g, "\\'") : '';
+                                    const safeName = name.replace(/'/g, "\\'");
+
+                                    const clickHandler = isLink 
+                                        ? `window.open('${safeUrl}', '_blank')`
+                                        : `downloadAttachmentFile('${safePath}', '${safeName}')`;
+
+                                    return `
+                                        <div onclick="${clickHandler}" class="flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 ${colorClass}">
+                                            <div class="p-1.5 rounded-lg bg-white shrink-0 shadow-sm flex items-center justify-center">
+                                                <i data-lucide="${icon}" class="w-4 h-4 ${iconColor}"></i>
+                                            </div>
+                                            <div class="min-w-0 flex-1">
+                                                <p class="text-[11px] font-semibold truncate">${name}</p>
+                                                <p class="text-[9px] opacity-60 truncate">${isLink ? att.url : 'Download local file'}</p>
+                                            </div>
+                                            <div class="shrink-0 opacity-40 hover:opacity-100">
+                                                <i data-lucide="${isLink ? 'external-link' : 'download'}" class="w-3.5 h-3.5"></i>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${courseWebLinks.length > 0 ? `
+                        <div class="mt-6 pt-6 border-t border-slate-100" id="course-weblinks-section">
+                            <div class="flex items-center gap-2 mb-3">
+                                <i data-lucide="link-2" class="w-3.5 h-3.5 text-slate-400"></i>
+                                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Course Web Links</h3>
+                                <div class="relative group ml-1">
+                                    <i data-lucide="info" class="w-3.5 h-3.5 text-slate-300 cursor-help"></i>
+                                    <div class="absolute hidden group-hover:flex flex-col bottom-6 left-0 w-72 text-xs bg-slate-800 text-slate-100 p-3 rounded-lg shadow-xl z-20 leading-relaxed">
+                                        <span class="font-semibold text-white mb-1">Why is this here?</span>
+                                        This assignment has an attached web link, but Schoology's export file does not include the exact URL — it stores only a server-side placeholder. Search the ${courseWebLinks.length} course web links below to find the relevant one.
+                                    </div>
+                                </div>
+                            </div>
+                            <input id="weblink-search-input" type="text" placeholder="Search ${courseWebLinks.length} course web links…"
+                                   class="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 bg-white">
+                            <div id="weblink-search-results" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1"></div>
+                        </div>
+                        ` : ''}
                     </div>`;
 
                 iframe.classList.add('hidden');
                 placeholder.innerHTML = htmlOutput;
                 placeholder.className = "absolute inset-0 overflow-y-auto bg-slate-50 z-0 p-4 sm:p-8 block";
                 placeholder.classList.remove('hidden');
-
-                if (allAttachments && allAttachments.length > 0) {
-                    // Deduplicate attachments by path/url
-                    const seen = new Set();
-                    const uniqueAttachments = [];
-                    allAttachments.forEach(a => {
-                        const id = a.type === 'file' ? a.path : a.url;
-                        if (!seen.has(id)) {
-                            seen.add(id);
-                            uniqueAttachments.push(a);
-                        }
-                    });
-
-                    const standaloneAttachments = uniqueAttachments.filter(a => a.type !== 'file' || !embeddedPaths.has(a.path));
-                    if (standaloneAttachments.length > 0) {
-                        attachmentsFooter.classList.remove('hidden');
-                        renderAttachments(standaloneAttachments);
-                    } else {
-                        attachmentsFooter.classList.add('hidden');
-                    }
-                } else {
-                    attachmentsFooter.classList.add('hidden');
-                }
+                attachmentsFooter.classList.add('hidden');
                 lucide.createIcons();
+
+                // Wire up the course web links search widget if present
+                if (courseWebLinks.length > 0) {
+                    const searchInput = placeholder.querySelector('#weblink-search-input');
+                    const resultsDiv = placeholder.querySelector('#weblink-search-results');
+                    if (searchInput && resultsDiv) {
+                        const renderWebLinks = (query) => {
+                            const q = query.toLowerCase().trim();
+                            const filtered = q ? courseWebLinks.filter(l => l.title.toLowerCase().includes(q)) : courseWebLinks;
+                            resultsDiv.innerHTML = filtered.map(l => {
+                                const safeUrl = l.url.replace(/'/g, "\\'");
+                                const safeTitle = l.title.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                const lowerUrl = l.url.toLowerCase();
+                                let icon = 'link', iconColor = 'text-indigo-400';
+                                if (lowerUrl.includes('docs.google.com/document')) { icon = 'file-text'; iconColor = 'text-blue-400'; }
+                                else if (lowerUrl.includes('docs.google.com/presentation')) { icon = 'presentation'; iconColor = 'text-amber-400'; }
+                                else if (lowerUrl.includes('docs.google.com/forms')) { icon = 'check-square'; iconColor = 'text-purple-400'; }
+                                else if (lowerUrl.includes('youtube.com') || lowerUrl.includes('youtu.be')) { icon = 'video'; iconColor = 'text-red-400'; }
+                                else if (lowerUrl.includes('drive.google.com')) { icon = 'hard-drive'; iconColor = 'text-green-400'; }
+                                return `<div onclick="window.open('${safeUrl}','_blank')" class="flex items-center gap-2.5 p-2.5 rounded-lg border border-slate-100 hover:bg-indigo-50 hover:border-indigo-200 cursor-pointer transition-colors group">
+                                    <i data-lucide="${icon}" class="w-3.5 h-3.5 shrink-0 ${iconColor}"></i>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-[11px] font-semibold text-slate-700 group-hover:text-indigo-700 truncate">${safeTitle}</p>
+                                    </div>
+                                    <i data-lucide="external-link" class="w-3 h-3 shrink-0 text-slate-300 group-hover:text-indigo-400"></i>
+                                </div>`;
+                            }).join('');
+                            lucide.createIcons({ el: resultsDiv });
+                        };
+                        renderWebLinks('');
+                        searchInput.addEventListener('input', e => renderWebLinks(e.target.value));
+                    }
+                }
             }
             // Handler: HTML
             else if (['html', 'htm'].includes(ext)) {
@@ -922,7 +1663,7 @@
                     
                     if (val && !val.startsWith('http') && !val.startsWith('#') && !val.startsWith('mailto:')) {
                         const solvedPath = resolvePath(res.href, val);
-                        const assetFile = currentZip.file(solvedPath);
+                        const assetFile = currentZip.file(solvedPath) || currentZip.file(solvedPath.replace(/^\//, ''));
                         
                         if (assetFile) {
                             // If it's an image or media embedded, we track it so we don't show it as an external attachment
@@ -931,8 +1672,12 @@
                             }
 
                             if (node.tagName === 'A') {
-                                // Expose linked internal files to attachments footer
-                                allAttachments.push({ type: 'file', path: solvedPath, name: solvedPath.split('/').pop() });
+                                let linkText = node.textContent.trim().replace(/\s+/g, ' ') || solvedPath.split('/').pop();
+                                const contextText = doc.body ? doc.body.textContent : "";
+                                const details = await getAttachmentDetails(solvedPath, linkText, contextText);
+                                if (details) {
+                                    allAttachments.push(details);
+                                }
 
                                 const assetBlob = await assetFile.async("blob");
                                 const url = URL.createObjectURL(assetBlob);
@@ -950,6 +1695,15 @@
                                 assetBlobs.push(url);
                                 node.setAttribute(attr, url);
                             }
+                        } else if (node.tagName === 'A' && (val.includes('sgy-core-full') || val.includes('sgy_pkg') || val.includes('var/www/html'))) {
+                            // Link not in zip but matches Schoology server redirect path, resolve it!
+                            let linkText = node.textContent.trim().replace(/\s+/g, ' ') || title || solvedPath.split('/').pop();
+                            const contextText = doc.body ? doc.body.textContent : "";
+                            const details = await getAttachmentDetails(solvedPath, linkText, contextText);
+                            if (details && details.type === 'link') {
+                                node.setAttribute(attr, details.url);
+                                node.setAttribute('target', '_blank');
+                            }
                         }
                     }
                 }
@@ -962,7 +1716,17 @@
 
                 // Update attachments footer to hide embedded files
                 if (allAttachments && allAttachments.length > 0) {
-                    const standaloneAttachments = allAttachments.filter(a => a.type !== 'file' || !embeddedPaths.has(a.path));
+                    const seen = new Set();
+                    const uniqueAttachments = [];
+                    allAttachments.forEach(a => {
+                        const id = a.type === 'file' ? a.path : a.url;
+                        if (id && !seen.has(id)) {
+                            seen.add(id);
+                            uniqueAttachments.push(a);
+                        }
+                    });
+
+                    const standaloneAttachments = uniqueAttachments.filter(a => a.type !== 'file' || !embeddedPaths.has(a.path));
                     if (standaloneAttachments.length > 0) {
                         attachmentsFooter.classList.remove('hidden');
                         renderAttachments(standaloneAttachments);
