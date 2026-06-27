@@ -258,14 +258,45 @@
                     };
                 });
 
+                // Extract course title robustly
+                let courseTitle = "Unnamed Collection";
+
+                // Try LOM metadata title
+                const strings = doc.getElementsByTagNameNS('*', 'string');
+                for (let s of strings) {
+                    if (s.parentNode && s.parentNode.localName === 'title') {
+                        courseTitle = s.textContent;
+                        break;
+                    }
+                }
+
+                // Fallback to top-level title not inside an item or resource
+                if (courseTitle === "Unnamed Collection") {
+                    const titles = doc.getElementsByTagNameNS('*', 'title');
+                    for (let t of titles) {
+                        if (!t.closest('item') && !t.closest('resource')) {
+                            courseTitle = t.textContent;
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback to filename
+                if (courseTitle === "Unnamed Collection" && file.name) {
+                    courseTitle = file.name.replace(/\.[^/.]+$/, "");
+                }
+
                 organizations = Array.from(doc.querySelectorAll('organization')).map(org => {
                     return {
                         id: org.getAttribute('identifier'),
-                        title: org.querySelector('title')?.textContent || "Unnamed Collection",
+                        title: courseTitle,
                         type: "Course",
                         items: Array.from(org.children).filter(c => c.tagName === 'item')
                     };
                 });
+
+                // Store course title globally so we can use it in buildTree fallback
+                window._currentCourseTitle = courseTitle;
 
                 document.getElementById('dropzone').classList.add('hidden');
 
@@ -413,7 +444,15 @@
 
         function buildTree(nodes, container, depth = 0) {
             Array.from(nodes).forEach(node => {
-                const title = node.querySelector('title')?.textContent || "Untitled";
+                let titleNode = Array.from(node.children).find(c => c.tagName === 'title');
+                let title = titleNode ? titleNode.textContent : null;
+
+                if (!title && depth === 0 && window._currentCourseTitle) {
+                    title = window._currentCourseTitle;
+                }
+
+                title = title || "Untitled";
+
                 const ref = node.getAttribute('identifierref');
                 const children = Array.from(node.children).filter(c => c.tagName === 'item');
                 nodeIdCounter++;
@@ -505,10 +544,17 @@
 
         function resolvePath(basePath, relativePath) {
             if (!relativePath) return null;
+
+            try {
+                relativePath = decodeURIComponent(relativePath);
+            } catch (e) {
+                // Ignore malformed URIs
+            }
+
             // Absolute or data/hash links
             if (relativePath.match(/^(http|https|data|blob|mailto|#|\/):/)) return relativePath;
             
-            // Normalize path separators
+            // 1. Try standard relative resolution
             const baseDir = basePath.substring(0, basePath.lastIndexOf('/'));
             const parts = baseDir.split('/').filter(p => p !== '');
             const relParts = relativePath.split('/').filter(p => p !== '');
@@ -522,7 +568,22 @@
                 }
             }
             
-            return parts.join('/');
+            let standardPath = parts.join('/');
+            if (currentZip && currentZip.file(standardPath)) return standardPath;
+
+            // 2. Try resolving from archive root
+            let rootPath = relativePath.startsWith('/') ? relativePath.substring(1) : relativePath;
+            if (currentZip && currentZip.file(rootPath)) return rootPath;
+
+            // 3. Brute force search by filename
+            if (currentZip) {
+                const targetFilename = relativePath.split('/').pop();
+                const allFiles = Object.keys(currentZip.files);
+                const found = allFiles.find(f => f.split('/').pop() === targetFilename);
+                if (found) return found;
+            }
+
+            return standardPath; // fallback to standard if nothing else works
         }
 
         function openInNewWindow() {
@@ -719,6 +780,124 @@
                 downloadBtn.classList.remove('hidden');
                 lucide.createIcons();
             }
+            // Handler: Assignments
+            else if (res.type && res.type.toLowerCase().includes('assignment')) {
+                let xmlText = await file.async("string");
+                const xmlDoc = new DOMParser().parseFromString(xmlText, 'text/xml');
+
+                let assignmentTitle = xmlDoc.querySelector('title')?.textContent;
+                let textNode = xmlDoc.querySelector('text');
+                let htmlContent = textNode ? (textNode.textContent || textNode.innerHTML) : "";
+                // Sometimes CDATA tags are left in textContent by DOMParser for XML depending on implementation
+                htmlContent = htmlContent.replace(/<!\[CDATA\[/g, '').replace(/]]>/g, '');
+
+                const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
+
+                if (!doc.head.querySelector('meta[charset]')) {
+                    const meta = document.createElement('meta');
+                    meta.setAttribute('charset', 'UTF-8');
+                    doc.head.insertBefore(meta, doc.head.firstChild);
+                }
+
+                // Extract attachments defined in XML
+                const xmlAttachments = xmlDoc.querySelectorAll('attachment');
+                xmlAttachments.forEach(att => {
+                    const href = att.getAttribute('href');
+                    if (href) {
+                        const resolvedPath = resolvePath(res.href, href);
+                        if (resolvedPath && currentZip.file(resolvedPath)) {
+                            allAttachments.push({ type: 'file', path: resolvedPath, name: resolvedPath.split('/').pop() });
+                        }
+                    }
+                });
+
+                const selectors = 'img[src], video[src], audio[src], source[src], link[rel="stylesheet"], script[src], a[href]';
+                const nodes = Array.from(doc.querySelectorAll(selectors));
+
+                const embeddedPaths = new Set();
+
+                for (const node of nodes) {
+                    const attr = node.tagName === 'LINK' || node.tagName === 'A' ? 'href' : 'src';
+                    const val = node.getAttribute(attr);
+
+                    if (val && !val.startsWith('http') && !val.startsWith('#') && !val.startsWith('mailto:')) {
+                        const solvedPath = resolvePath(res.href, val);
+                        const assetFile = currentZip.file(solvedPath);
+
+                        if (assetFile) {
+                            if (node.tagName !== 'A' && node.tagName !== 'LINK') {
+                                embeddedPaths.add(solvedPath);
+                            }
+
+                            if (node.tagName === 'A') {
+                                // Expose linked internal files to attachments footer
+                                allAttachments.push({ type: 'file', path: solvedPath, name: solvedPath.split('/').pop() });
+
+                                const assetBlob = await assetFile.async("blob");
+                                const url = URL.createObjectURL(assetBlob);
+                                assetBlobs.push(url);
+                                node.setAttribute(attr, url);
+                                node.setAttribute("download", assetFile.name.split('/').pop());
+                                node.removeAttribute("onclick");
+                                node.style.textDecoration = "underline";
+                                node.style.color = "blue";
+                            } else {
+                                const assetBlob = await assetFile.async("blob");
+                                let mime = assetFile.name.endsWith('css') ? 'text/css' :
+                                          assetFile.name.endsWith('js') ? 'application/javascript' : assetBlob.type;
+                                const url = URL.createObjectURL(new Blob([assetBlob], { type: mime }));
+                                assetBlobs.push(url);
+                                node.setAttribute(attr, url);
+                            }
+                        }
+                    }
+                }
+
+                let docTitle = assignmentTitle || title || doc.title || "Assignment";
+                let displayHtml = doc.body ? doc.body.innerHTML : doc.documentElement.innerHTML;
+
+                let htmlOutput = `
+                    <div class="p-8 bg-white rounded-2xl shadow-sm border border-slate-200 text-left max-w-3xl mx-auto w-full my-8">
+                        <div class="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
+                            <div class="p-2 bg-purple-50 text-purple-500 rounded-lg">
+                                <i data-lucide="clipboard-list" class="w-6 h-6"></i>
+                            </div>
+                            <h2 class="text-lg font-bold text-slate-800">${docTitle}</h2>
+                        </div>
+                        <div class="prose prose-sm prose-slate max-w-none">
+                            ${displayHtml}
+                        </div>
+                    </div>`;
+
+                iframe.classList.add('hidden');
+                placeholder.innerHTML = htmlOutput;
+                placeholder.className = "absolute inset-0 overflow-y-auto bg-slate-50 z-0 p-4 sm:p-8 block";
+                placeholder.classList.remove('hidden');
+
+                if (allAttachments && allAttachments.length > 0) {
+                    // Deduplicate attachments by path/url
+                    const seen = new Set();
+                    const uniqueAttachments = [];
+                    allAttachments.forEach(a => {
+                        const id = a.type === 'file' ? a.path : a.url;
+                        if (!seen.has(id)) {
+                            seen.add(id);
+                            uniqueAttachments.push(a);
+                        }
+                    });
+
+                    const standaloneAttachments = uniqueAttachments.filter(a => a.type !== 'file' || !embeddedPaths.has(a.path));
+                    if (standaloneAttachments.length > 0) {
+                        attachmentsFooter.classList.remove('hidden');
+                        renderAttachments(standaloneAttachments);
+                    } else {
+                        attachmentsFooter.classList.add('hidden');
+                    }
+                } else {
+                    attachmentsFooter.classList.add('hidden');
+                }
+                lucide.createIcons();
+            }
             // Handler: HTML
             else if (['html', 'htm'].includes(ext)) {
                 let html = await file.async("string");
@@ -752,10 +931,17 @@
                             }
 
                             if (node.tagName === 'A') {
-                                // For links to other files inside the zip
+                                // Expose linked internal files to attachments footer
+                                allAttachments.push({ type: 'file', path: solvedPath, name: solvedPath.split('/').pop() });
+
+                                const assetBlob = await assetFile.async("blob");
+                                const url = URL.createObjectURL(assetBlob);
+                                assetBlobs.push(url);
+                                node.setAttribute(attr, url);
+                                node.setAttribute("download", assetFile.name.split('/').pop());
+                                node.removeAttribute("onclick");
                                 node.style.textDecoration = "underline";
                                 node.style.color = "blue";
-                                node.onclick = () => alert('Internal zip links are disabled in preview. Please find the file in the sidebar.');
                             } else {
                                 const assetBlob = await assetFile.async("blob");
                                 let mime = assetFile.name.endsWith('css') ? 'text/css' : 
@@ -985,6 +1171,7 @@
         function getIcon(ref) {
             if (!ref) return 'folder';
             const t = resources[ref]?.type || '';
+            if (t.includes('assignment')) return 'clipboard-list';
             if (t.includes('imswl')) return 'link';
             if (t.includes('imsdt')) return 'message-square';
             if (t.includes('webcontent')) {
